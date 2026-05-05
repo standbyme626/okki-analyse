@@ -1,0 +1,7 @@
+screenshots/
+logs/
+scripts/__pycache__/
+__pycache__/
+*.pyc
+.claude/settings.local.json
+data/
