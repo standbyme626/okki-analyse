@@ -13,6 +13,7 @@ import subprocess
 import time
 from typing import Any, Dict, List, Optional, Set
 
+from .edge_bridge import _eval as _ab_eval, _run as _ab_run
 from .page_model import ActionPlan, PageMode, StructuredError
 
 _ALLOWED_LEVELS: Set[str] = {"A", "A-", "B", "B-", "C", "D"}
@@ -348,31 +349,6 @@ def prepare_add_customer_tags(
 # ---------------------------------------------------------------------------
 # Executable operations (solidified from live OKKI interaction tests)
 # ---------------------------------------------------------------------------
-
-
-def _ab_run(*args: str, session: str = "okki", timeout_sec: int = 30) -> str:
-    """Run one agent-browser command and return stdout.
-
-    Raises RuntimeError when command fails.
-    """
-    cmd = ["agent-browser", "--session", session, *args]
-    p = subprocess.run(cmd, text=True, capture_output=True, timeout=timeout_sec)
-    if p.returncode != 0:
-        raise RuntimeError((p.stderr or p.stdout).strip())
-    return (p.stdout or "").strip()
-
-
-def _ab_eval(js: str, session: str = "okki", timeout_sec: int = 30) -> Any:
-    """Run `agent-browser eval` and parse JSON-like outputs when possible."""
-    out = _ab_run("eval", js, session=session, timeout_sec=timeout_sec).strip()
-    if not out:
-        return None
-    if out.startswith('"'):
-        out = json.loads(out)
-    try:
-        return json.loads(out)
-    except json.JSONDecodeError:
-        return out
 
 
 def _js_quote(value: str) -> str:
