@@ -39,6 +39,13 @@
 - 安全措施：随机间隔、分批、断点续爬、模拟人类行为
 - 时间估算：按 2,000 条/天约 16 天，可加速至 10 天
 
+## 2026-05-05 — 数据库选型及设计
+
+新建 `docs/database_design.md`：
+- 选型 SQLite3（已安装 3.45.1），分析 PostgreSQL/MySQL/MariaDB/ClickHouse 均不适合
+- 设计四张表：`raw_scrape`（原始存档 JSON）、`clean_customers`（33 字段结构化）、`enriched_customers`（背调结论）、`writeback_plan`（回填执行计划+状态追踪）
+- 配置 WAL 模式 + 外键约束
+
 ## 2026-05-05 — 补充 CLAUDE.md（安全规则 + 交互规则 + 页面模式 + 截图策略）
 
 从 AGENTS.md 提炼关键操作规则到 CLAUDE.md：
