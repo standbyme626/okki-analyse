@@ -14,12 +14,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from okki_agent.edge_bridge import _run
-from okki_agent.list_page import collect_current_page_rows, get_list_page_state, reset_list_scroll_top
+from okki_agent.list_page import collect_list_page_rows_via_api, get_list_page_state
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Collect current OKKI list-page customer URLs without writes."
+        description="Collect one OKKI list-page customer URL page without writes."
     )
     parser.add_argument("--page", type=int, default=0, help="Expected page number; 0 means auto-detect.")
     parser.add_argument("--page-size", type=int, default=100)
@@ -83,7 +83,7 @@ def main() -> int:
     summary_path = Path(args.summary_out) if args.summary_out else paths["summary"]
     snapshot_path = Path(args.snapshot_out) if args.snapshot_out else paths["snapshot"]
 
-    result = collect_current_page_rows(page=page, expected_page_size=args.page_size)
+    result = collect_list_page_rows_via_api(page=page, expected_page_size=args.page_size)
     valid_rows = result["valid_rows"]
     output_rows = valid_rows[: args.limit] if args.limit else valid_rows
 
@@ -105,7 +105,6 @@ def main() -> int:
 
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path.write_text(_run("snapshot", "-i", timeout_sec=20) + "\n", encoding="utf-8")
-    reset_list_scroll_top()
 
     summary = {
         "timestamp": stamp,

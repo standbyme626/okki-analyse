@@ -60,6 +60,17 @@
   - 每页检查页码、页大小、列表容器、raw_count、重复 company_id、空国家数量；
   - 翻页与页间加入随机等待，每 3 页加入额外休息；
   - 任一健康检查失败时保存 `on-error` snapshot 并停止。
+- 调整 `okki_agent/list_page.py`：
+  - 采集步长改为按估算行高小步扫描，降低虚拟列表漏行概率。
+  - 过滤虚拟列表中 `translateY(-9999px)` 的缓存行，并按真实 `translateY` 位置恢复页面顺序。
+  - 新增 `collect_list_page_rows_via_api()`，复用当前列表 URL 筛选条件调用 OKKI 自身只读接口 `/api/customerV3Read/companyList`，避免 `100 条/页` 虚拟滚动 DOM 漏行。
+  - API 采集输出继续保持 `customer_index,customer_name,customer_url,country,last_contact,note`，国家字段使用浏览器 `Intl.DisplayNames('zh-CN')` 转为中文国家名，省/市保留原始文本。
+- 更新 `scripts/collect_stage1_urls.py`：
+  - 默认改为只读 API 采集单页，DOM 仅用于确认当前页面状态和保存 snapshot。
+- 更新 `scripts/collect_stage1_page_batch.py`：
+  - 连续页采集改为按 `curPage` 调用只读 API，不再依赖翻页点击或虚拟滚动；
+  - 保留随机节奏、健康检查、异常即停、combined CSV、raw JSON、summary JSON 和最终 snapshot；
+  - 批量运行结束后追加 `logs/experiment-runs.jsonl` 实验记录。
 
 ### 影响范围
 

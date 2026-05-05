@@ -17,6 +17,7 @@ from .edge_bridge import _eval
 
 DETAIL_ROUTE = "/crm/customer/personal"
 DETAIL_URL_PREFIX = "https://crm.xiaoman.cn/crm/customer/personal?company_id="
+LIST_API_PATH = "/api/customerV3Read/companyList"
 LIST_SCROLLER_SELECTOR = ".vue-recycle-scroller.ready.direction-vertical.row-items"
 NON_DEMO_NOTE = "auto_collected_non_demo"
 
@@ -33,6 +34,7 @@ class CustomerListRow:
     note: str = NON_DEMO_NOTE
     raw_name: str = ""
     href: str = ""
+    virtual_top: int = 0
     is_demo: bool = False
 
 
@@ -49,6 +51,147 @@ def get_detail_url(company_id: str) -> str:
 def parse_company_id(url: str) -> str:
     m = re.search(r"[?&]company_id=([^&]+)", url or "")
     return m.group(1) if m else ""
+
+
+def _rows_result(page: int, expected_page_size: int, raw_rows: List[CustomerListRow], **extra: Any) -> Dict[str, Any]:
+    demo_rows = [row for row in raw_rows if row.is_demo]
+    valid_rows = [row for row in raw_rows if not row.is_demo]
+    result = {
+        "page": page,
+        "expected_page_size": expected_page_size,
+        "raw_count": len(raw_rows),
+        "demo_count": len(demo_rows),
+        "valid_count": len(valid_rows),
+        "rows": [asdict(row) for row in raw_rows],
+        "valid_rows": [asdict(row) for row in valid_rows],
+        "demo_rows": [asdict(row) for row in demo_rows],
+    }
+    result.update(extra)
+    return result
+
+
+def collect_list_page_rows_via_api(page: int, expected_page_size: int = 100) -> Dict[str, Any]:
+    """Collect one list page from OKKI's read-only companyList endpoint.
+
+    The browser UI already uses this endpoint to populate the list. Calling it
+    from page context reuses the active login and current URL filters while
+    avoiding virtual-scroller DOM gaps.
+    """
+    js = rf"""(async () => {{
+      const query = JSON.parse(new URL(location.href).searchParams.get('query') || '{{}}');
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(query)) {{
+        if (key === '_p_swarm_id') continue;
+        if (Array.isArray(value)) {{
+          value.forEach((v, i) => params.append(`${{key}}[${{i}}]`, String(v)));
+        }} else if (value !== undefined && value !== null && value !== '') {{
+          params.append(key, String(value));
+        }}
+      }}
+      params.set('pageSize', String({int(expected_page_size)}));
+      params.set('curPage', String({int(page)}));
+      params.set('layout_flag', '1');
+
+      const displayNames = new Intl.DisplayNames(['zh-CN'], {{type: 'region'}});
+      const normName = s => (s || '').replace(/\u00a0/g, ' ').trim();
+      const compactName = s => normName(s).replace(/\s+/g, '');
+      const countryName = code => {{
+        if (!code) return '';
+        try {{ return displayNames.of(code) || code; }} catch (e) {{ return code; }}
+      }};
+      const regionLabel = row => {{
+        const region = row.country_region || {{}};
+        const country = region.country || row.country || '';
+        const province = region.province || row.province || '';
+        const city = region.city || row.city || '';
+        return [countryName(country), province, city].filter(Boolean).join('/');
+      }};
+      const lastContact = row => {{
+        const label = row.order_time_info && row.order_time_info.info_label;
+        if (label) return label;
+        if (row.order_time) return String(row.order_time).slice(0, 16);
+        const trail = row.last_trail || {{}};
+        return String(trail.create_time || trail.created_at || trail.update_time || '').slice(0, 16);
+      }};
+
+      const resp = await fetch('{LIST_API_PATH}', {{
+        method: 'POST',
+        credentials: 'include',
+        headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+        body: params.toString(),
+      }});
+      const text = await resp.text();
+      let data = null;
+      try {{
+        data = JSON.parse(text);
+      }} catch (e) {{
+        return JSON.stringify({{
+          ok: false,
+          status: resp.status,
+          error: 'INVALID_JSON',
+          text: text.slice(0, 500),
+          request_body: params.toString(),
+        }});
+      }}
+      const list = data && data.data && Array.isArray(data.data.list) ? data.data.list : [];
+      return JSON.stringify({{
+        ok: resp.ok && data.code === 0,
+        status: resp.status,
+        code: data && data.code,
+        message: data && (data.msg || data.message || ''),
+        request_body: params.toString(),
+        total_item: data && data.data ? data.data.totalItem : null,
+        rows: list.map(row => {{
+          const rawName = normName((row.name_info && row.name_info.info_label) || row.name);
+          const companyId = String(row.company_id || '');
+          return {{
+            company_id: companyId,
+            raw_name: rawName,
+            customer_name: compactName(rawName),
+            customer_url: '{DETAIL_URL_PREFIX}' + companyId,
+            href: '{DETAIL_ROUTE}?company_id=' + companyId,
+            country: regionLabel(row),
+            country_code: row.country || '',
+            last_contact: lastContact(row),
+            is_demo: rawName.startsWith('（示例）') || compactName(rawName).startsWith('（示例）'),
+          }};
+        }}),
+      }});
+    }})()"""
+    payload = _eval(js, timeout_sec=30)
+    if not payload or not payload.get("ok"):
+        raise RuntimeError(f"Failed to read OKKI list API: {payload}")
+
+    raw_rows: List[CustomerListRow] = []
+    for index, row in enumerate(payload.get("rows", []), start=1):
+        company_id = str(row.get("company_id") or "")
+        raw_rows.append(
+            CustomerListRow(
+                page=page,
+                page_row_index=index,
+                company_id=company_id,
+                customer_name=row.get("customer_name", ""),
+                customer_url=row.get("customer_url") or get_detail_url(company_id),
+                country=row.get("country", ""),
+                last_contact=row.get("last_contact", ""),
+                raw_name=row.get("raw_name", ""),
+                href=row.get("href", ""),
+                virtual_top=(index - 1) * 40,
+                is_demo=bool(row.get("is_demo")),
+            )
+        )
+
+    return _rows_result(
+        page,
+        expected_page_size,
+        raw_rows,
+        source="list_api",
+        api_status=payload.get("status"),
+        api_code=payload.get("code"),
+        api_message=payload.get("message"),
+        api_total_item=payload.get("total_item"),
+        api_request_body=payload.get("request_body"),
+    )
 
 
 def get_list_page_state() -> Dict[str, Any]:
@@ -173,6 +316,12 @@ def _read_visible_rows() -> Dict[str, Any]:
       const normName = s => (s || '').replace(/\u00a0/g, ' ').trim();
       const compactName = s => normName(s).replace(/\s+/g, '');
       const abs = href => new URL(href, location.origin).href;
+      const virtualTop = row => {{
+        const view = row.closest('.vue-recycle-scroller__item-view');
+        const style = view ? (view.getAttribute('style') || '') : '';
+        const m = style.match(/translateY\((-?\d+(?:\.\d+)?)px\)/);
+        return m ? Math.round(parseFloat(m[1])) : null;
+      }};
       const scroller = document.querySelector('{LIST_SCROLLER_SELECTOR}')
         || [...document.querySelectorAll('div')].find(el =>
           String(el.className || '').includes('vue-recycle-scroller')
@@ -181,6 +330,7 @@ def _read_visible_rows() -> Dict[str, Any]:
       const rows = [...document.querySelectorAll('.row-item.row-item-level-1.__virtual_list_default_class__, .row-item-level-1')]
         .filter(row => row.querySelector('a[href*="{DETAIL_ROUTE}?company_id="]'))
         .map(row => {{
+          const top = virtualTop(row);
           const a = row.querySelector('a[href*="{DETAIL_ROUTE}?company_id="]');
           const cells = [...row.querySelectorAll(':scope > .cell')].map(cell => normName(cell.textContent));
           const href = a.getAttribute('href') || '';
@@ -195,10 +345,11 @@ def _read_visible_rows() -> Dict[str, Any]:
             company_id: m ? m[1] : '',
             last_contact: cells[6] || '',
             country: cells[7] || '',
+            virtual_top: top,
             is_demo: rawName.startsWith('（示例）') || compactName(rawName).startsWith('（示例）')
           }};
         }})
-        .filter(row => row.company_id);
+        .filter(row => row.company_id && row.virtual_top !== null && row.virtual_top >= 0);
       return JSON.stringify({{
         scrollTop: scroller ? scroller.scrollTop : null,
         clientHeight: scroller ? scroller.clientHeight : null,
@@ -226,7 +377,8 @@ def collect_current_page_rows(
     if client_height <= 0 or scroll_height <= 0:
         raise RuntimeError(f"Invalid list scroller dimensions: {meta}")
 
-    step = max(200, int(client_height * 0.75))
+    estimated_row_height = max(20, int(scroll_height / max(1, expected_page_size)))
+    step = max(40, estimated_row_height * 2)
     positions = list(range(0, scroll_height + step, step))
     if positions[-1] != scroll_height:
         positions.append(scroll_height)
@@ -255,7 +407,11 @@ def collect_current_page_rows(
                 ordered_ids.append(company_id)
 
     raw_rows: List[CustomerListRow] = []
-    for index, company_id in enumerate(ordered_ids, start=1):
+    sorted_ids = sorted(
+        ordered_ids,
+        key=lambda company_id: int(rows_by_company[company_id].get("virtual_top") or 0),
+    )
+    for index, company_id in enumerate(sorted_ids, start=1):
         row = rows_by_company[company_id]
         raw_rows.append(
             CustomerListRow(
@@ -268,24 +424,18 @@ def collect_current_page_rows(
                 last_contact=row.get("last_contact", ""),
                 raw_name=row["raw_name"],
                 href=row["href"],
+                virtual_top=int(row.get("virtual_top") or 0),
                 is_demo=bool(row["is_demo"]),
             )
         )
 
-    demo_rows = [row for row in raw_rows if row.is_demo]
-    valid_rows = [row for row in raw_rows if not row.is_demo]
-
-    return {
-        "page": page,
-        "expected_page_size": expected_page_size,
-        "raw_count": len(raw_rows),
-        "demo_count": len(demo_rows),
-        "valid_count": len(valid_rows),
-        "rows": [asdict(row) for row in raw_rows],
-        "valid_rows": [asdict(row) for row in valid_rows],
-        "demo_rows": [asdict(row) for row in demo_rows],
-        "sweeps": sweeps,
-    }
+    return _rows_result(
+        page,
+        expected_page_size,
+        raw_rows,
+        source="dom_virtual_scroller",
+        sweeps=sweeps,
+    )
 
 
 def reset_list_scroll_top() -> None:

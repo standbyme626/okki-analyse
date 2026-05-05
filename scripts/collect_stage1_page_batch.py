@@ -17,10 +17,8 @@ if str(ROOT) not in sys.path:
 
 from okki_agent.edge_bridge import _run
 from okki_agent.list_page import (
-    collect_current_page_rows,
+    collect_list_page_rows_via_api,
     get_list_page_state,
-    next_list_page,
-    reset_list_scroll_top,
 )
 
 
@@ -70,12 +68,14 @@ def validate_page(
     result: Dict[str, Any],
 ) -> List[str]:
     errors: List[str] = []
-    if state.get("current_page") != expected_page:
-        errors.append(f"page mismatch: expected {expected_page}, got {state.get('current_page')}")
     if state.get("page_size_text") != f"{page_size} 条/页":
         errors.append(f"page size mismatch: expected {page_size} 条/页, got {state.get('page_size_text')}")
     if not state.get("scroller_found"):
         errors.append("list scroller missing")
+    if result.get("page") != expected_page:
+        errors.append(f"result page mismatch: expected {expected_page}, got {result.get('page')}")
+    if result.get("api_code") not in (0, None):
+        errors.append(f"api_code not successful: {result.get('api_code')}")
     if result.get("raw_count", 0) < min_raw_count:
         errors.append(f"raw_count too low: {result.get('raw_count')} < {min_raw_count}")
     company_ids = [row["company_id"] for row in result.get("rows", [])]
@@ -107,6 +107,51 @@ def write_combined_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
             )
 
 
+def append_experiment_log(summary: Dict[str, Any], start_state: Dict[str, Any]) -> None:
+    out = Path("logs/experiment-runs.jsonl")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    completed = summary["completed_pages"]
+    requested = summary["requested_pages"]
+    status = "success" if completed == requested else ("partial" if completed else "failed")
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    record = {
+        "timestamp_start": now,
+        "timestamp_end": now,
+        "objective": "Stage 1 collect OKKI customer list URLs via read-only companyList API",
+        "start_url": start_state.get("location", ""),
+        "page_mode": "full_page",
+        "commands_executed": [
+            "python3 scripts/collect_stage1_page_batch.py",
+        ],
+        "clicked_targets": [],
+        "expected_result": f"Collect {requested} logical list pages with health checks and no OKKI writes",
+        "actual_result": (
+            f"completed_pages={completed}, total_valid_rows={summary['total_valid_rows']}, "
+            f"combined_csv={summary['combined_csv']}"
+        ),
+        "result": status,
+        "write_action": {
+            "attempted": False,
+            "dry_run": True,
+            "customer_name": "",
+            "old_level": "",
+            "new_level": "",
+            "old_tags": [],
+            "proposed_tags": [],
+            "applied_tags": [],
+        },
+        "screenshot_paths": [summary["final_snapshot"]],
+        "artifacts": [
+            summary["combined_csv"],
+            summary["summary_path"],
+            summary["raw_dir"],
+        ],
+        "conclusion": "Read-only list collection finished" if status == "success" else "Read-only list collection stopped by health check",
+    }
+    with out.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 def main() -> int:
     args = parse_args()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -134,11 +179,11 @@ def main() -> int:
         expected_page = start_page + offset
         state = get_list_page_state()
         settle_sec = round(random.uniform(0.35, 0.8), 2)
-        result = collect_current_page_rows(
+        result = collect_list_page_rows_via_api(
             page=expected_page,
             expected_page_size=args.page_size,
-            settle_sec=settle_sec,
         )
+        events.append({"event": "api_page_request", "page": expected_page, "settle_sec": settle_sec})
         errors = validate_page(expected_page, args.page_size, args.min_raw_count, state, result)
 
         page_raw_path = raw_dir / f"page{expected_page:03d}.raw.json"
@@ -170,15 +215,12 @@ def main() -> int:
 
         all_valid_rows.extend(result["valid_rows"])
         write_combined_csv(combined_path, all_valid_rows)
-        reset_list_scroll_top()
 
         if offset == args.pages - 1:
             break
 
-        sleep_random(args.page_delay_min, args.page_delay_max, "post-page collection pacing", events)
-        nav = next_list_page(timeout_sec=25)
-        events.append({"event": "next_page", **nav})
-        sleep_random(args.nav_delay_min, args.nav_delay_max, "post-navigation pacing", events)
+        sleep_random(args.page_delay_min, args.page_delay_max, "post-page api pacing", events)
+        sleep_random(args.nav_delay_min, args.nav_delay_max, "between logical pages pacing", events)
 
         if args.extra_break_every and (offset + 1) % args.extra_break_every == 0:
             sleep_random(args.extra_break_min, args.extra_break_max, "periodic batch break", events)
@@ -201,6 +243,7 @@ def main() -> int:
     }
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    append_experiment_log(summary, start_state)
 
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if summary["completed_pages"] == args.pages else 1
