@@ -31,6 +31,14 @@
 - `validate_dropdown_fields_paced.py` — 自动复活，无需改动
 - 其余脚本不受影响
 
+## 2026-05-05 — 补充 CLAUDE.md（安全规则 + 交互规则 + 页面模式 + 截图策略）
+
+从 AGENTS.md 提炼关键操作规则到 CLAUDE.md：
+- Safety rules：6 条硬约束（dry_run 默认、禁止保存/批量操作、写后验证等）
+- Browser interaction rules：语义选择器优先于 @eXX ref，每次 DOM 变化后 re-snapshot
+- Page modes：drawer vs full-page，操作前必须检测
+- Screenshot checkpoints：before-read / before-write / after-write / on-error 四处
+
 ## 2026-05-05 — 新建 CLAUDE.md
 
 项目初始化文档，供后续 Claude Code 实例了解：

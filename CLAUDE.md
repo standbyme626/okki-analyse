@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-OKKI CRM (crm.xiaoman.cn) browser automation for customer tagging. Python scripts drive browser interactions through `agent-browser` CLI. See `AGENTS.md` for full safety rules and workflow conventions.
+OKKI CRM (crm.xiaoman.cn) browser automation for customer tagging. Python scripts drive browser interactions through `agent-browser` CLI.
 
 ## Browser connection (critical)
 
@@ -17,6 +17,50 @@ WSL (this repo) ──HTTP──▶ 172.22.208.1:21002 (bridge) ──▶ Edge C
 The bridge URL is auto-discovered by `okki_agent/edge_bridge.py` via `GET /json/version`. Override default with envar `OKKI_BRIDGE_URL`. The Edge must be launched on the Windows side first via `okki_edge_cdp_bridge.ps1`.
 
 **Never use `agent-browser --session okki`** — that spawns a headless Chrome with no OKKI auth and all operations fail. All browser commands go through `--cdp <ws_url>` via `edge_bridge._run()`.
+
+## Safety rules
+
+- Never click **Save / Submit / Send / Delete / Confirm** buttons during exploration unless explicitly asked.
+- Never batch-update, delete, merge, or archive OKKI records unless explicitly asked.
+- Never send emails, messages, inquiries, or WhatsApp messages.
+- All writer functions default to **dry_run=True**. Real writes require the user to explicitly lift this.
+- After every write action, perform **read-back verification** of changed fields.
+- Every write action must produce a log entry: customer name, old tags, proposed tags, action taken, success/failure, screenshot path.
+
+## Browser interaction rules
+
+### Selector strategy
+
+- **Never hardcode transient `@eXX` refs** in long-term scripts — they expire across snapshots.
+- Use **semantic anchors first**: field labels (`客户等级`), section names (`公司常用信息`), stable text near the target.
+- Fallback selectors only when semantic anchors fail. Never rely on screen coordinates.
+- Keep a state-machine approach for list page vs detail page transitions.
+
+### Snapshot discipline
+
+- `snapshot -i` before any interaction to get fresh refs.
+- Re-run snapshot after **every** navigation or DOM change.
+- `@eXX` refs are valid only for the immediately following action, not beyond.
+
+## Page modes
+
+OKKI customer detail has two modes. Automation must **detect the current mode first**, then route to the matching action flow:
+
+| Mode | How to reach | Detection |
+|------|-------------|-----------|
+| **Drawer** | Open detail in right-side panel from customer list | `"客户列表"` or tab markers in snapshot, no full-page URL |
+| **Full-page** | Navigate to `/crm/customer/personal?company_id=...` | URL matches route, `"客户详情"` in title |
+
+## Screenshot checkpoints
+
+Don't screenshot every step. Only at these four checkpoints:
+
+| Checkpoint | When |
+|------------|------|
+| `before-read` | Arrived on target customer detail |
+| `before-write` | Just before any write-intent operation |
+| `after-write` | After save/confirm (when explicitly allowed) |
+| `on-error` | Any failed locator / action / validation |
 
 ## Architecture
 
