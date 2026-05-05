@@ -64,13 +64,14 @@ Prefer generating Playwright or Browser Use scripts for repeatable execution.
 
 ## Agent Browser Workflow
 
-1. Open page with `agent-browser --session okki --headed open <url>`.
-2. Ask user to log in manually when needed.
-3. Run `agent-browser --session okki snapshot -i`.
-4. Use refs like `@e1`, `@e2` only after a fresh snapshot.
-5. Re-run snapshot after every navigation or DOM change.
-6. Save screenshots into `screenshots/`.
-7. Generate code only after verifying the page flow.
+1. Ensure Windows Edge CDP bridge is running (`okki_edge_cdp_bridge.ps1`) and user is logged in manually in Edge.
+2. Never use `agent-browser --session okki`.
+3. Prefer `okki_agent.edge_bridge._run()` / `_eval()` for browser commands (auto-discovery from bridge `/json/version`).
+4. If raw CLI is needed, use `agent-browser --cdp <ws_url> <command>`.
+5. Run `snapshot -i` before interaction, and re-run after every navigation or DOM change.
+6. Use refs like `@e1`, `@e2` only from the latest snapshot.
+7. Save screenshots into `screenshots/`.
+8. Generate code only after verifying the page flow.
 
 ## First MVP
 
@@ -87,3 +88,8 @@ Create a script that handles one test customer only:
 - Single-customer write is allowed only when explicitly requested by user.
 - Bulk writes are forbidden unless user explicitly approves batch scope and stop conditions.
 - After a write, always perform read-back verification of changed fields.
+
+## Change Log Discipline
+
+- Every repository modification must append one entry in `CHANGELOG.md`.
+- Each entry should include: date, objective, changed files, and behavioral impact.

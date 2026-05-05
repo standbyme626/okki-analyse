@@ -97,4 +97,6 @@ prev_page()   # → (2, 1), raises if on page 1
 
 ## Commit convention
 
-Record every modification in `docs/CHANGELOG.md`. Commit message in English.
+- Record every modification in repository-root `CHANGELOG.md`.
+- Every change entry must include: date, objective, touched files, and impact summary.
+- Commit message in English.

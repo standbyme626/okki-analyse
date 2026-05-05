@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-05-05 — 文档一致性修正：执行命令统一 + 变更日志强制记录
+
+### 背景
+
+- `AGENTS.md` 中仍存在 `agent-browser --session okki` 示例；
+- 连接层已切换到 Edge CDP bridge，`--session okki` 在本项目中不可用；
+- 需要把“每次修改都要写日志”上升为明确规则，避免后续变更无记录。
+
+### 改动
+
+- 更新 `AGENTS.md` 的 Agent Browser Workflow：
+  - 移除 `--session okki` 示例；
+  - 改为 `--cdp <ws_url>` 或 `okki_agent.edge_bridge._run()` 方式；
+  - 补充 bridge 前置条件与登录前置条件。
+- 更新 `CLAUDE.md` 的提交规范：
+  - 明确记录路径为仓库根目录 `CHANGELOG.md`；
+  - 明确“每次文件修改必须追加 changelog 记录”。
+- 更新 `docs/scraping_plan.md`：
+  - 增加 CDP bridge 前置条件；
+  - 增加 page_mode（drawer/full_page）检测与分流；
+  - 增加单客户 dry-run 门禁；
+  - 增加实验日志字段与截图检查点要求。
+
+### 影响范围
+
+- 仅文档与流程约束更新，不改变业务逻辑代码。
+
 ## 2026-05-05 — 连接层重构：CDP bridge 接入 + 翻页函数
 
 ### 背景

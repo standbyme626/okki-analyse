@@ -4,6 +4,13 @@
 
 爬取 OKKI 中 31,914 条"客户等级为空"的客户资料，用于后续背调分析和回填。
 
+### 连接前置条件（必须）
+
+- 浏览器连接统一走 Windows Edge CDP bridge。
+- 禁止使用 `agent-browser --session okki`。
+- 优先使用 `okki_agent.edge_bridge._run()` / `_eval()`。
+- 运行前确认 bridge 可访问（`OKKI_BRIDGE_URL`，默认 `http://172.22.208.1:21002`）。
+
 ## 数据需求分析
 
 ### 文档依据
@@ -61,7 +68,20 @@
 
 ## 爬取策略
 
+### 阶段0：单客户 Dry-Run 门禁（先于批量执行）
+
+- 仅执行 1 个测试客户：搜索、打开详情、读取现有标签、产出 proposed tags。
+- 明确禁止保存（stop before save）。
+- 门禁通过后，才进入阶段一/阶段二批量流程。
+
 ### 两阶段方案
+
+### 页面模式检测与分流
+
+- 每个客户先检测 `page_mode`：`drawer` / `full_page` / `unknown`。
+- `full_page`：直接访问 `/crm/customer/personal?company_id=...`。
+- `drawer`：在列表页点击客户进入右侧抽屉。
+- `unknown`：重抓一次 `snapshot -i`，仍失败则记录到失败日志并跳过。
 
 #### 阶段一：采集 company_id 列表
 
@@ -89,6 +109,11 @@
 | 每日上限 | 每天 4 批，约 2,000 条/天 |
 | 断点续爬 | 每条实时写 JSONL + progress.json 记录进度 |
 | 失败隔离 | 单条失败不阻塞整体流程 |
+
+### 实验日志与截图检查点（强制）
+
+- 每次 run 记录：objective, start_url, page_mode, commands_executed, clicked_target, expected_result, actual_result, screenshot_paths, conclusion。
+- 截图检查点：`before-read`、`on-error`；`before-write`/`after-write` 仅在用户明确授权写入时启用。
 
 ### 时间估算
 
