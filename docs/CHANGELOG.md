@@ -30,3 +30,11 @@
 - `batch_set_restore_customer_level.py` — 自动复活，无需改动
 - `validate_dropdown_fields_paced.py` — 自动复活，无需改动
 - 其余脚本不受影响
+
+## 2026-05-05 — 新建 CLAUDE.md
+
+项目初始化文档，供后续 Claude Code 实例了解：
+- 浏览器连接架构（CDP bridge → Windows Edge）
+- 核心模块关系（edge_bridge → writer → scripts）
+- 脚本编写范式
+- 提交规范（每次修改记录 CHANGELOG）
