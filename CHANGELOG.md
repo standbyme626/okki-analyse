@@ -1,5 +1,70 @@
 # Changelog
 
+## 2026-05-05 — 固化 OKKI 列表页 URL 采集模型
+
+### 背景
+
+- OKKI 客户列表已改为 `100 条/页`，但页面使用虚拟滚动，静态 DOM 只能看到当前渲染窗口内的部分客户链接；
+- 阶段一需要稳定采集客户详情 URL，并过滤 `（示例）` 客户；
+- 列表页提取逻辑需要从临时 JS 固化为可复用代码，供当前页、下一页和后续分页采集复用。
+
+### 改动
+
+- 新增 `okki_agent/list_page.py`：
+  - 固化列表虚拟滚动容器定位；
+  - 提供当前页滚动扫描、详情 URL 解析、示例客户过滤和页面状态读取；
+  - 固化 `li[title="下一页"].okki-pagination-next` 分页方式，并等待翻页后虚拟列表内容刷新；
+  - 输出 `raw_count`、`demo_count`、`valid_count` 以及 raw/valid/demo rows。
+- 新增 `scripts/collect_stage1_urls.py`：
+  - 只读采集当前列表页客户 URL；
+  - 输出仓库既有 CSV 格式：`customer_index,customer_name,customer_url,note`；
+  - 同步写 raw JSON、summary JSON 和最终 snapshot 证据。
+
+### 影响范围
+
+- 只新增阶段一读操作工具，不执行写入、保存、提交或客户资料修改。
+
+## 2026-05-05 — 扩展阶段一 CSV：国家地区与最近联系时间
+
+### 背景
+
+- 列表行 DOM 已确认包含 `国家地区` 与 `最近联系时间` 两列；
+- 后续背调优先级排序需要直接使用国家和活跃度字段；
+- 原 CSV 只包含客户名与详情 URL，不便于人工检查。
+
+### 改动
+
+- 更新 `okki_agent/list_page.py`：
+  - 从每行 `.cell` 中读取 `country` 与 `last_contact`；
+  - 保留 raw JSON 中完整行字段，便于复核。
+- 更新 `scripts/collect_stage1_urls.py`：
+  - 默认 CSV 字段调整为 `customer_index,customer_name,customer_url,country,last_contact,note`；
+  - 增加 `--limit` 参数，用于先输出小样本预览。
+
+### 影响范围
+
+- 阶段一采集输出格式变更；仍为只读采集，不执行任何 OKKI 写操作。
+
+## 2026-05-05 — 增加阶段一多页采集脚本与健康检查
+
+### 背景
+
+- 需要从单页采集推进到 10 页 smoke test；
+- 连续翻页采集需要随机节奏、翻页后刷新等待和异常即停，避免过快读取或污染输出。
+
+### 改动
+
+- 新增 `scripts/collect_stage1_page_batch.py`：
+  - 从当前页开始连续采集多页；
+  - 每页执行虚拟滚动扫描并写 combined CSV；
+  - 每页检查页码、页大小、列表容器、raw_count、重复 company_id、空国家数量；
+  - 翻页与页间加入随机等待，每 3 页加入额外休息；
+  - 任一健康检查失败时保存 `on-error` snapshot 并停止。
+
+### 影响范围
+
+- 新增只读批量采集入口；不执行客户详情打开、写入、保存或消息发送。
+
 ## 2026-05-05 — 文档一致性修正：执行命令统一 + 变更日志强制记录
 
 ### 背景

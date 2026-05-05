@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import random
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from okki_agent.edge_bridge import _run
+from okki_agent.list_page import (
+    collect_current_page_rows,
+    get_list_page_state,
+    next_list_page,
+    reset_list_scroll_top,
+)
+
+
+CSV_FIELDS = [
+    "customer_index",
+    "page",
+    "page_row_index",
+    "customer_name",
+    "customer_url",
+    "country",
+    "last_contact",
+    "note",
+]
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Collect multiple OKKI list pages with pacing and health checks."
+    )
+    parser.add_argument("--pages", type=int, default=10)
+    parser.add_argument("--page-size", type=int, default=100)
+    parser.add_argument("--min-raw-count", type=int, default=95)
+    parser.add_argument("--page-delay-min", type=float, default=2.0)
+    parser.add_argument("--page-delay-max", type=float, default=5.0)
+    parser.add_argument("--nav-delay-min", type=float, default=3.0)
+    parser.add_argument("--nav-delay-max", type=float, default=6.0)
+    parser.add_argument("--extra-break-every", type=int, default=3)
+    parser.add_argument("--extra-break-min", type=float, default=10.0)
+    parser.add_argument("--extra-break-max", type=float, default=20.0)
+    parser.add_argument("--out", default="", help="Combined CSV output path.")
+    parser.add_argument("--raw-dir", default="logs/recon/stage1_batch")
+    parser.add_argument("--summary-out", default="")
+    return parser.parse_args()
+
+
+def sleep_random(min_sec: float, max_sec: float, reason: str, events: List[Dict[str, Any]]) -> None:
+    duration = round(random.uniform(min_sec, max_sec), 2)
+    events.append({"event": "sleep", "reason": reason, "seconds": duration})
+    time.sleep(duration)
+
+
+def validate_page(
+    expected_page: int,
+    page_size: int,
+    min_raw_count: int,
+    state: Dict[str, Any],
+    result: Dict[str, Any],
+) -> List[str]:
+    errors: List[str] = []
+    if state.get("current_page") != expected_page:
+        errors.append(f"page mismatch: expected {expected_page}, got {state.get('current_page')}")
+    if state.get("page_size_text") != f"{page_size} 条/页":
+        errors.append(f"page size mismatch: expected {page_size} 条/页, got {state.get('page_size_text')}")
+    if not state.get("scroller_found"):
+        errors.append("list scroller missing")
+    if result.get("raw_count", 0) < min_raw_count:
+        errors.append(f"raw_count too low: {result.get('raw_count')} < {min_raw_count}")
+    company_ids = [row["company_id"] for row in result.get("rows", [])]
+    if len(company_ids) != len(set(company_ids)):
+        errors.append("duplicate company_id detected in raw rows")
+    blank_country = sum(1 for row in result.get("valid_rows", []) if not row.get("country"))
+    if blank_country > 20:
+        errors.append(f"too many blank country values: {blank_country}")
+    return errors
+
+
+def write_combined_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        writer.writeheader()
+        for index, row in enumerate(rows, start=1):
+            writer.writerow(
+                {
+                    "customer_index": index,
+                    "page": row["page"],
+                    "page_row_index": row["page_row_index"],
+                    "customer_name": row["customer_name"],
+                    "customer_url": row["customer_url"],
+                    "country": row.get("country", ""),
+                    "last_contact": row.get("last_contact", ""),
+                    "note": row["note"],
+                }
+            )
+
+
+def main() -> int:
+    args = parse_args()
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    raw_dir = Path(args.raw_dir) / stamp
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    start_state = get_list_page_state()
+    start_page = int(start_state.get("current_page") or 0)
+    if start_page <= 0:
+        raise RuntimeError(f"Cannot determine current page: {start_state}")
+
+    end_page = start_page + args.pages - 1
+    combined_path = Path(args.out) if args.out else Path(
+        f"data/stage1_pages{start_page:03d}-{end_page:03d}_urls_{stamp}.csv"
+    )
+    summary_path = Path(args.summary_out) if args.summary_out else Path(
+        f"logs/recon/stage1_pages{start_page:03d}-{end_page:03d}_summary_{stamp}.json"
+    )
+
+    events: List[Dict[str, Any]] = []
+    all_valid_rows: List[Dict[str, Any]] = []
+    page_summaries: List[Dict[str, Any]] = []
+
+    for offset in range(args.pages):
+        expected_page = start_page + offset
+        state = get_list_page_state()
+        settle_sec = round(random.uniform(0.35, 0.8), 2)
+        result = collect_current_page_rows(
+            page=expected_page,
+            expected_page_size=args.page_size,
+            settle_sec=settle_sec,
+        )
+        errors = validate_page(expected_page, args.page_size, args.min_raw_count, state, result)
+
+        page_raw_path = raw_dir / f"page{expected_page:03d}.raw.json"
+        page_raw_path.write_text(
+            json.dumps({"state": state, "result": result, "errors": errors}, ensure_ascii=False, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        page_summary = {
+            "page": expected_page,
+            "state": state,
+            "raw_count": result["raw_count"],
+            "demo_count": result["demo_count"],
+            "valid_count": result["valid_count"],
+            "blank_country_count": sum(1 for row in result["valid_rows"] if not row.get("country")),
+            "errors": errors,
+            "raw_path": str(page_raw_path),
+        }
+        page_summaries.append(page_summary)
+        events.append({"event": "page_collected", **page_summary})
+
+        if errors:
+            snapshot_path = raw_dir / f"page{expected_page:03d}.on-error.snapshot_i.txt"
+            snapshot_path.write_text(_run("snapshot", "-i", timeout_sec=20) + "\n", encoding="utf-8")
+            page_summary["snapshot_path"] = str(snapshot_path)
+            write_combined_csv(combined_path, all_valid_rows)
+            break
+
+        all_valid_rows.extend(result["valid_rows"])
+        write_combined_csv(combined_path, all_valid_rows)
+        reset_list_scroll_top()
+
+        if offset == args.pages - 1:
+            break
+
+        sleep_random(args.page_delay_min, args.page_delay_max, "post-page collection pacing", events)
+        nav = next_list_page(timeout_sec=25)
+        events.append({"event": "next_page", **nav})
+        sleep_random(args.nav_delay_min, args.nav_delay_max, "post-navigation pacing", events)
+
+        if args.extra_break_every and (offset + 1) % args.extra_break_every == 0:
+            sleep_random(args.extra_break_min, args.extra_break_max, "periodic batch break", events)
+
+    final_snapshot = raw_dir / "final.snapshot_i.txt"
+    final_snapshot.write_text(_run("snapshot", "-i", timeout_sec=20) + "\n", encoding="utf-8")
+
+    summary = {
+        "timestamp": stamp,
+        "start_page": start_page,
+        "requested_pages": args.pages,
+        "completed_pages": len([p for p in page_summaries if not p["errors"]]),
+        "combined_csv": str(combined_path),
+        "summary_path": str(summary_path),
+        "raw_dir": str(raw_dir),
+        "final_snapshot": str(final_snapshot),
+        "total_valid_rows": len(all_valid_rows),
+        "page_summaries": page_summaries,
+        "events": events,
+    }
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0 if summary["completed_pages"] == args.pages else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
