@@ -1,5 +1,136 @@
 # Changelog
 
+## 2026-05-06 — 明确 sys 脊椎化与 Playwright/browser-use 分层，并启动首批 core 改造
+
+### 背景
+
+- 当前整体架构已经明确分层：
+  - `D:\kka` 负责 Windows 浏览器侧的 SidePanel、Companion、Playwright MCP、browser-use；
+  - `sys` 负责平台脊椎层，而不是继续扩成业务主脑；
+  - `ai-sales-system-text` 负责主业务流程、主状态机、主数据库；
+  - `EIH` 负责外部情报。
+- 因此当前仓库需要从“直接拥有浏览器的 OKKI 自动化项目”收缩成“消费观察结果的 OKKI/Alibaba 脊椎层”。
+- 用户同时要求保留两个浏览器层：
+  - `Playwright MCP` 作为主执行层；
+  - `browser-use` 作为探索 / 兜底层。
+
+### 改动
+
+- 新增 `docs/sys_playwright_spine_refactor.md`：
+  - 固化 `D:\kka -> Playwright MCP -> browser-use -> sys -> ai-sales-system-text -> EIH` 的系统分层；
+  - 明确 `sys` 的收缩边界、Alibaba 占位策略和迁移阶段。
+- 新增 `okki_agent/core_models.py`：
+  - 引入 `ObservationBundle`、`ActionIntent`、`ReadModel`、`PreparedActionPlan` 等浏览器无关模型。
+- 新增 `okki_agent/core_service.py`：
+  - 增加 bundle-based service facade；
+  - 提供 OKKI 的 `observe / prepare / verify / audit` 入口；
+  - 预留 Alibaba 只读观察与 plan placeholder 调用边界。
+- 新增 `okki_agent/alibaba_adapter.py`：
+  - 增加阿里页面类型检测、只读摘要、draft-only / review-only 计划占位。
+- 更新 `okki_agent/__init__.py`：
+  - 导出新的 spine service 入口。
+- 更新 `README.md`：
+  - 补充当前仓库角色说明与关键迁移文档入口。
+
+### 影响范围
+
+- 不改变现有 legacy `edge_bridge` / `agent-browser` 路径的可用性；
+- 为后续 `D:\kka` Companion 接 Playwright MCP 与 browser-use 的观察结果提供稳定的 `sys` 输入输出边界；
+- Alibaba 在本批仅新增只读占位和计划占位，不涉及任何真实发送、保存或回写。
+
+## 2026-05-06 — 引入万物良品自动化系统压缩包用于静态代码对比
+
+### 背景
+
+- 需要把外部参考项目 `万物良品的自动化系统.zip` 放入当前仓库目录，便于直接做静态代码对比；
+- 本次任务只分析代码结构与实现方式，不运行服务、不接浏览器、不触发任何 OKKI 写操作；
+- 为保持仓库操作可追溯，需要记录外部分析资产的引入。
+
+### 改动
+
+- 新增 `万物良品的自动化系统.zip` 到仓库根目录；
+- 新增解压目录 `wanwu_liangpin_extracted/`，供前后端代码静态分析使用；
+- 更新 `CHANGELOG.md` 记录本次分析资产引入。
+
+### 影响范围
+
+- 仅增加静态分析输入文件，不改变当前 `okki_agent/` 与 `scripts/` 的执行逻辑；
+- 后续可直接在当前仓库内对比外部项目的 Python、浏览器扩展与静态页面代码。
+
+## 2026-05-06 — Require explicit Beijing scrape timestamps for Stage 2 artifacts
+
+### 背景
+
+- 阶段二详情采集不仅要先保存原始 payload，还需要在数据层明确显示抓取时间；
+- 仅依赖运行环境默认时区不够直观，后续查看 CSV / JSON / manifest 时容易误解时间语义；
+- 需要把北京时间要求写成显式规则，并直接落实到阶段二采样脚本产物字段。
+
+### 改动
+
+- 更新 `AGENTS.md`：
+  - 在 `Stage 2 Raw-First Rule` 中新增北京时间戳要求；
+  - 明确字段名必须显式体现 `Asia/Shanghai` / Beijing time 语义。
+- 更新 `CLAUDE.md`：
+  - 同步新增阶段二北京时间戳要求。
+- 更新 `scripts/collect_stage2_detail_sample.py`：
+  - 为每条客户摘要新增 `scraped_at_beijing`；
+  - 为联系人明细新增 `scraped_at_beijing`；
+  - 为 summary 新增 `started_at_beijing / finished_at_beijing`。
+
+### 影响范围
+
+- 只影响阶段二详情采集规则和待跑采样脚本的输出字段，不涉及任何 OKKI 写入；
+- 后续所有阶段二原始存档和派生产物都将带显式北京时间戳。
+
+## 2026-05-06 — Add Stage 2 raw-first policy to agent instructions
+
+### 背景
+
+- `docs/database_design.md` 已明确阶段二应先抓完整原始信息，再做过滤、清洗和结构化；
+- 这条约束如果只留在数据库设计文档里，执行时容易再次滑回“先挑字段再抓”；
+- 需要把该规则提升为仓库级执行规范。
+
+### 改动
+
+- 更新 `AGENTS.md`：
+  - 新增 `Stage 2 Raw-First Rule`；
+  - 明确阶段二必须先保存完整 `scene=detail` / `scene=edit` 原始 JSON；
+  - 明确结构化 CSV 只是派生产物，不能替代原始存档。
+- 更新 `CLAUDE.md`：
+  - 同步新增 `Stage 2 raw-first rule`；
+  - 明确原始 payload 未抓全时，不能视为客户已完成采集。
+
+### 影响范围
+
+- 只影响仓库级执行规则，不涉及任何 OKKI 读写行为变更；
+- 为阶段二详情采集、后续清洗和回填前基线读取统一执行口径。
+
+## 2026-05-06 — 新增阶段二 20 条只读详情采样脚本
+
+### 背景
+
+- 阶段一 `320` 页 URL 主索引已经完成；
+- 下一步需要先做小样本阶段二验证，确认 `scene=detail / scene=edit` 详情接口能否稳定产出后续数据库设计所需字段；
+- 这一步只允许读，不允许任何 OKKI 写入。
+
+### 改动
+
+- 新增 `okki_agent/detail_page.py`：
+  - 固化 `GET /api/customerV2Read/detail?scene=detail|edit` 的只读抓取；
+  - 固化 `data.values` 解析、结构化摘要提取、联系人数组展开；
+  - 为后续阶段二全量抓取和写回前 fresh-read 复用。
+- 新增 `scripts/collect_stage2_detail_sample.py`：
+  - 从阶段一 CSV 选取前 `20` 条样本；
+  - 读取每条客户的 `scene=detail` 和 `scene=edit` 原始 JSON；
+  - 产出结构化摘要 CSV、联系人明细 CSV、逐客户原始包；
+  - 运行开头对首条客户详情页做一次 UI checkpoint，作为详情页 UI 固化证据；
+  - 只读限速运行，并将实验摘要追加到 `logs/experiment-runs.jsonl`。
+
+### 影响范围
+
+- 只影响阶段二只读详情采集，不涉及任何 OKKI 写入；
+- 为后续详情全量抓取、数据库入库和回填前基线读取提供统一接口层。
+
 ## 2026-05-06 — 修复阶段一末页总数漂移误判
 
 ### 背景
