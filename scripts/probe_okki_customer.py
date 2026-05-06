@@ -20,9 +20,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from okki_agent.edge_bridge import capture_checkpoint
 
-def run_cmd(cmd: list[str]) -> str:
-    p = subprocess.run(cmd, capture_output=True, text=True)
+
+def run_cmd(cmd: list[str], timeout_sec: int = 20) -> str:
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
     if p.returncode != 0:
         raise RuntimeError(
             f"Command failed ({p.returncode}): {' '.join(cmd)}\n"
@@ -39,8 +41,19 @@ class AgentBrowser:
         elif session:
             self.base += ["--session", session]
 
-    def run(self, *args: str) -> str:
-        return run_cmd(self.base + list(args))
+    def run(self, *args: str, timeout_sec: int = 20) -> str:
+        return run_cmd(self.base + list(args), timeout_sec=timeout_sec)
+
+    def eval(self, js: str, timeout_sec: int = 20) -> Any:
+        raw = self.run("eval", js, timeout_sec=timeout_sec).strip()
+        if not raw:
+            return None
+        if raw.startswith('"'):
+            raw = json.loads(raw)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
 
 
 def ensure_dirs() -> None:
@@ -220,10 +233,21 @@ def main() -> int:
     snap_i_path = Path(f"logs/{artifact_prefix}.snapshot_i.txt")
     snap_c_path = Path(f"logs/{artifact_prefix}.snapshot_c.txt")
     shot_path = Path(f"screenshots/{artifact_prefix}.png")
+    shot_probe_path = Path(f"logs/{artifact_prefix}.ready.json")
 
     save_text(snap_i_path, snapshot_i + "\n")
     save_text(snap_c_path, snapshot_c + "\n")
-    ab.run("screenshot", str(shot_path))
+    shot_meta = capture_checkpoint(
+        shot_path,
+        snapshot_path=snap_i_path,
+        probe_path=shot_probe_path,
+        page_kind="detail",
+        timeout_sec=25,
+        stable_rounds=2,
+        settle_ms=800,
+        run_fn=ab.run,
+        eval_fn=ab.eval,
+    )
 
     data = extract_panel_data(snapshot_c)
     proposed = propose_tags(data)
@@ -263,7 +287,9 @@ def main() -> int:
         "artifacts": {
             "snapshot_i": str(snap_i_path),
             "snapshot_c": str(snap_c_path),
-            "screenshot": str(shot_path),
+            "screenshot": shot_meta.get("screenshot_path"),
+            "checkpoint_probe": str(shot_probe_path),
+            "checkpoint_meta": shot_meta,
         },
         "note": "No save/submit/write actions executed.",
     }

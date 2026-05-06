@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-05-06 — 截图证据增加页面稳定门禁，避免白屏日志
+
+### 背景
+
+- 现有 checkpoint 截图规则只定义了 `before-read / before-write / after-write / on-error`，但没有统一的“页面稳定后再截图”实现；
+- 浏览器在 `open` / `reload` 后如果立即截图，容易留下白屏或未完成加载的无效证据；
+- 需要把稳定性等待逻辑收敛成共享 helper，并接入实际写入脚本。
+
+### 改动
+
+- 更新 `okki_agent/edge_bridge.py`：
+  - 新增 `wait_ms()`、`get_url()`、`get_title()`、`snapshot_i()`；
+  - 新增页面探针、稳定等待和 `capture_checkpoint()`；
+  - helper 改为支持自定义 `run/eval` 包装器，方便旧 session 脚本和新 bridge 脚本共用同一套截图门禁；
+  - checkpoint 截图默认要求页面 ready 后再执行，并同步输出 probe/snapshot 证据。
+- 更新 `scripts/batch_set_restore_customer_level.py`、`scripts/validate_dropdown_fields_paced.py`、`scripts/batch_read_profile_fields.py`、`scripts/verify_next_10_customers_readonly.py`、`scripts/probe_okki_customer.py`、`scripts/test_fill_restore_7fields.py`：
+  - 将直接 `screenshot` 改为统一走 `capture_checkpoint()`；
+  - 截图旁同时落盘 `.ready.json` 与 `.snapshot_i.txt`，便于复盘为什么跳过或成功；
+  - 日志中保留 `capture_ready / capture_success / screenshot_error / snapshot_error` 等元数据。
+- 更新 `AGENTS.md`、`CLAUDE.md`、`RUN_REVIEW_AND_SOLIDIFICATION.md`：
+  - 明确普通 checkpoint 不允许在页面未稳定时直接截图；
+  - 若超时仍未 ready，应记录 probe/snapshot，跳过普通截图，而不是保留白屏 PNG。
+
+### 影响范围
+
+- 后续通过 edge bridge 执行的 checkpoint 截图默认更严格，日志证据更可读；
+- 不改变 OKKI 写入范围，也不新增任何批量写入行为。
+
 ## 2026-05-06 — 将接口/UI 固化规则写入 AGENTS 与 CLAUDE
 
 ### 背景

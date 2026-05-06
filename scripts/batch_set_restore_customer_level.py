@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from okki_agent import writer
+from okki_agent.edge_bridge import capture_checkpoint
 
 
 INPUT_JSONL = ROOT / "logs" / "profile_field_batch_read.jsonl"
@@ -40,11 +41,36 @@ def is_empty(v: Optional[str]) -> bool:
     return writer.is_empty_like_value(v)
 
 
-def shot(name: str) -> str:
+def shot(name: str) -> Dict[str, Any]:
     path = SHOT_DIR / name
+    stem = Path(name).stem
     SHOT_DIR.mkdir(parents=True, exist_ok=True)
-    writer._ab_run("screenshot", str(path), timeout_sec=20)
-    return str(path)
+    return capture_checkpoint(
+        path,
+        snapshot_path=SHOT_DIR / f"{stem}.snapshot_i.txt",
+        probe_path=SHOT_DIR / f"{stem}.ready.json",
+        page_kind="detail",
+        timeout_sec=25,
+        stable_rounds=2,
+        settle_ms=800,
+    )
+
+
+def append_shot(rec: Dict[str, Any], name: str, label: str) -> None:
+    meta = shot(name)
+    rec["actions"].append(
+        {
+            "checkpoint": label,
+            "capture_ready": meta.get("ready"),
+            "capture_success": meta.get("captured"),
+            "probe_path": meta.get("probe_path"),
+            "snapshot_path": meta.get("snapshot_path"),
+            "snapshot_error": meta.get("snapshot_error"),
+            "screenshot_error": meta.get("screenshot_error"),
+        }
+    )
+    if meta.get("captured") and meta.get("screenshot_path"):
+        rec["screenshots"].append(str(meta["screenshot_path"]))
 
 
 def append_jsonl(path: Path, obj: Dict[str, Any]) -> None:
@@ -230,7 +256,7 @@ def set_level_to_b(row: Row) -> Dict[str, Any]:
             rec["error"] = op
             return rec
 
-        rec["screenshots"].append(shot(f"idx{row.customer_index:03d}-set-before.png"))
+        append_shot(rec, f"idx{row.customer_index:03d}-set-before.png", "before-read")
         before = writer.read_visible_field_value("客户等级")
         rec["baseline_level"] = before
         rec["actions"].append({"read_before": before})
@@ -250,7 +276,7 @@ def set_level_to_b(row: Row) -> Dict[str, Any]:
         sel = set_level_b_with_retry(rec["actions"])
         rec["actions"].append({"select_B_final": sel})
         rec["actions"].append({"wait_after_select": writer.wait_ms(WAIT_MS)})
-        rec["screenshots"].append(shot(f"idx{row.customer_index:03d}-set-before-save.png"))
+        append_shot(rec, f"idx{row.customer_index:03d}-set-before-save.png", "before-write")
 
         save_out = writer.save_changes()
         rec["actions"].append({"save": save_out})
@@ -262,7 +288,7 @@ def set_level_to_b(row: Row) -> Dict[str, Any]:
         after = writer.read_visible_field_value("客户等级")
         rec["after_level"] = after
         rec["actions"].append({"read_after": after})
-        rec["screenshots"].append(shot(f"idx{row.customer_index:03d}-set-after-save.png"))
+        append_shot(rec, f"idx{row.customer_index:03d}-set-after-save.png", "after-write")
 
         if norm(after) == TARGET_LEVEL:
             rec["status"] = "success"
@@ -272,7 +298,7 @@ def set_level_to_b(row: Row) -> Dict[str, Any]:
     except Exception as e:  # pragma: no cover
         rec["error"] = str(e)
         try:
-            rec["screenshots"].append(shot(f"idx{row.customer_index:03d}-set-on-error.png"))
+            append_shot(rec, f"idx{row.customer_index:03d}-set-on-error.png", "on-error")
         except Exception:
             pass
     return rec
@@ -300,7 +326,7 @@ def restore_level(row: Row, baseline_level: Optional[str]) -> Dict[str, Any]:
             rec["error"] = op
             return rec
 
-        rec["screenshots"].append(shot(f"idx{row.customer_index:03d}-restore-before.png"))
+        append_shot(rec, f"idx{row.customer_index:03d}-restore-before.png", "before-read")
         before = writer.read_visible_field_value("客户等级")
         rec["before_restore_level"] = before
         rec["actions"].append({"read_before_restore": before})
@@ -315,7 +341,7 @@ def restore_level(row: Row, baseline_level: Optional[str]) -> Dict[str, Any]:
         rec["actions"].append({"restore_final": act})
 
         rec["actions"].append({"wait_after_restore_select": writer.wait_ms(WAIT_MS)})
-        rec["screenshots"].append(shot(f"idx{row.customer_index:03d}-restore-before-save.png"))
+        append_shot(rec, f"idx{row.customer_index:03d}-restore-before-save.png", "before-write")
 
         save_out = writer.save_changes()
         rec["actions"].append({"save": save_out})
@@ -327,7 +353,7 @@ def restore_level(row: Row, baseline_level: Optional[str]) -> Dict[str, Any]:
         after = writer.read_visible_field_value("客户等级")
         rec["after_restore_level"] = after
         rec["actions"].append({"read_after_restore": after})
-        rec["screenshots"].append(shot(f"idx{row.customer_index:03d}-restore-after-save.png"))
+        append_shot(rec, f"idx{row.customer_index:03d}-restore-after-save.png", "after-write")
 
         if is_empty(baseline_level):
             ok = is_empty(after)
@@ -341,7 +367,7 @@ def restore_level(row: Row, baseline_level: Optional[str]) -> Dict[str, Any]:
     except Exception as e:  # pragma: no cover
         rec["error"] = str(e)
         try:
-            rec["screenshots"].append(shot(f"idx{row.customer_index:03d}-restore-on-error.png"))
+            append_shot(rec, f"idx{row.customer_index:03d}-restore-on-error.png", "on-error")
         except Exception:
             pass
     return rec

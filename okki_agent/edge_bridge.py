@@ -14,17 +14,20 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import subprocess
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Tuple
+from typing import Any, Callable, Dict, List, Literal, Tuple
 
 _BRIDGE_HTTP = os.environ.get(
     "OKKI_BRIDGE_URL",
     "http://172.22.208.1:21002",
 )
 _ws_url: str | None = None
+RunFn = Callable[..., str]
+EvalFn = Callable[..., Any]
 
 
 def _get_ws_url() -> str:
@@ -66,6 +69,215 @@ def _eval(js: str, timeout_sec: int = 30, **_kw: Any) -> Any:
         return json.loads(out)
     except (json.JSONDecodeError, TypeError):
         return out
+
+
+def wait_ms(ms: int, *, run_fn: RunFn | None = None) -> None:
+    """Wait inside the active browser page."""
+    timeout_sec = max(5, int(ms / 1000) + 5)
+    runner = run_fn or _run
+    runner("wait", str(ms), timeout_sec=timeout_sec)
+
+
+def get_url(timeout_sec: int = 10, *, run_fn: RunFn | None = None) -> str:
+    runner = run_fn or _run
+    return runner("get", "url", timeout_sec=timeout_sec)
+
+
+def get_title(timeout_sec: int = 10, *, run_fn: RunFn | None = None) -> str:
+    runner = run_fn or _run
+    return runner("get", "title", timeout_sec=timeout_sec)
+
+
+def snapshot_i(timeout_sec: int = 20, *, run_fn: RunFn | None = None) -> str:
+    runner = run_fn or _run
+    return runner("snapshot", "-i", timeout_sec=timeout_sec)
+
+
+def _page_probe(*, eval_fn: EvalFn | None = None) -> Dict[str, Any]:
+    js = """(() => {
+        const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
+        const text = norm(document.body ? document.body.innerText : '');
+        const buttons = [...document.querySelectorAll('button')]
+            .map(btn => norm(btn.innerText || btn.textContent || ''))
+            .filter(Boolean);
+        const bodyRect = document.body
+            ? document.body.getBoundingClientRect()
+            : { width: 0, height: 0 };
+        return JSON.stringify({
+            ready_state: document.readyState || '',
+            visibility_state: document.visibilityState || '',
+            url: location.href,
+            title: document.title || '',
+            text_len: text.length,
+            text_head: text.slice(0, 240),
+            body_child_count: document.body ? document.body.children.length : 0,
+            body_width: Math.round(bodyRect.width || 0),
+            body_height: Math.round(bodyRect.height || 0),
+            has_loading_mask: Boolean(document.querySelector(
+                '.okki-spin-spinning,.ant-spin-spinning,.okki-loading,.loading,[aria-busy="true"]'
+            )),
+            has_detail_title: text.includes('客户详情'),
+            has_edit_button: buttons.some(
+                text => text === '编 辑' || text === '编辑' || text.replace(/\\s+/g, '') === '编辑'
+            ),
+            has_profile_tab: text.includes('资料'),
+            has_common_section: text.includes('公司常用信息'),
+            has_other_section: text.includes('公司其他信息'),
+            has_detail_summary: text.includes('客户阶段')
+                || text.includes('标签：')
+                || text.includes('标签:')
+                || text.includes('AI 客户分析')
+                || text.includes('AI客户分析'),
+            has_list_landmark: text.includes('客户列表')
+                || text.includes('最近联系时间')
+                || text.includes('国家地区'),
+        });
+    })()"""
+    evaluator = eval_fn or _eval
+    probe = evaluator(js, timeout_sec=10)
+    if isinstance(probe, dict):
+        return probe
+    return {"probe_raw": probe}
+
+
+def _is_probe_ready(
+    probe: Dict[str, Any],
+    page_kind: Literal["detail", "list", "generic"],
+) -> bool:
+    if probe.get("ready_state") != "complete":
+        return False
+    if probe.get("has_loading_mask"):
+        return False
+    if int(probe.get("body_width") or 0) < 240:
+        return False
+    if int(probe.get("body_height") or 0) < 240:
+        return False
+    if int(probe.get("text_len") or 0) < 80:
+        return False
+
+    url = str(probe.get("url") or "")
+    title = str(probe.get("title") or "")
+
+    if page_kind == "detail":
+        on_detail_route = "/crm/customer/personal" in url or "客户详情" in title
+        has_detail_landmark = any(
+            [
+                bool(probe.get("has_edit_button")),
+                bool(probe.get("has_profile_tab")),
+                bool(probe.get("has_common_section")),
+                bool(probe.get("has_other_section")),
+                bool(probe.get("has_detail_summary")),
+                bool(probe.get("has_detail_title")),
+            ]
+        )
+        return on_detail_route and has_detail_landmark
+
+    if page_kind == "list":
+        on_list_route = "/crm/customer/list" in url or "客户列表" in title
+        return on_list_route and bool(probe.get("has_list_landmark"))
+
+    return True
+
+
+def wait_for_page_stable(
+    page_kind: Literal["detail", "list", "generic"] = "detail",
+    timeout_sec: int = 20,
+    stable_rounds: int = 2,
+    poll_interval_sec: float = 1.0,
+    *,
+    eval_fn: EvalFn | None = None,
+) -> Tuple[bool, Dict[str, Any], List[Dict[str, Any]]]:
+    """Wait until the active page is stable enough for screenshots."""
+    deadline = time.monotonic() + timeout_sec
+    ready_hits = 0
+    last_probe: Dict[str, Any] = {}
+    history: List[Dict[str, Any]] = []
+
+    while time.monotonic() < deadline:
+        probe = _page_probe(eval_fn=eval_fn)
+        probe["page_kind"] = page_kind
+        probe["ready"] = _is_probe_ready(probe, page_kind)
+        history.append(probe)
+        last_probe = probe
+
+        if probe["ready"]:
+            ready_hits += 1
+            if ready_hits >= max(1, stable_rounds):
+                return True, probe, history
+        else:
+            ready_hits = 0
+
+        time.sleep(poll_interval_sec)
+
+    return False, last_probe, history
+
+
+def capture_checkpoint(
+    screenshot_path: str | Path,
+    *,
+    snapshot_path: str | Path | None = None,
+    probe_path: str | Path | None = None,
+    page_kind: Literal["detail", "list", "generic"] = "detail",
+    timeout_sec: int = 20,
+    stable_rounds: int = 2,
+    settle_ms: int = 800,
+    capture_when_unready: bool = False,
+    run_fn: RunFn | None = None,
+    eval_fn: EvalFn | None = None,
+) -> Dict[str, Any]:
+    """Capture screenshot evidence only after the page reaches a stable state."""
+    runner = run_fn or _run
+    ready, probe, history = wait_for_page_stable(
+        page_kind=page_kind,
+        timeout_sec=timeout_sec,
+        stable_rounds=stable_rounds,
+        eval_fn=eval_fn,
+    )
+
+    result: Dict[str, Any] = {
+        "page_kind": page_kind,
+        "ready": ready,
+        "captured": False,
+        "probe": probe,
+        "probe_history": history,
+    }
+
+    if ready and settle_ms > 0:
+        wait_ms(settle_ms, run_fn=runner)
+
+    if snapshot_path is not None:
+        snap_out = Path(snapshot_path)
+        snap_out.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            snap_out.write_text(
+                snapshot_i(timeout_sec=30, run_fn=runner) + "\n",
+                encoding="utf-8",
+            )
+            result["snapshot_path"] = str(snap_out)
+        except Exception as exc:
+            result["snapshot_error"] = str(exc)
+
+    if not ready and not capture_when_unready:
+        return result
+
+    shot_out = Path(screenshot_path)
+    shot_out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        runner("screenshot", str(shot_out), timeout_sec=60)
+        result["captured"] = True
+        result["screenshot_path"] = str(shot_out)
+    except Exception as exc:
+        result["screenshot_error"] = str(exc)
+
+    if probe_path is not None:
+        probe_out = Path(probe_path)
+        probe_out.parent.mkdir(parents=True, exist_ok=True)
+        probe_out.write_text(
+            json.dumps(result, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        result["probe_path"] = str(probe_out)
+    return result
 
 
 def _get_current_page() -> int:

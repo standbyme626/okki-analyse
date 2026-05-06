@@ -207,6 +207,16 @@ diff 检查只允许目标字段变化
 用户确认范围和停止条件
 ```
 
+截图前置门禁：
+
+```text
+不要在 open / reload 后立刻截图
+必须先确认页面 readyState=complete
+必须确认无 loading mask
+必须确认详情页语义 landmark 已出现
+若超时仍未 ready，则写 probe + snapshot，跳过普通 checkpoint 截图，不保留白屏 PNG
+```
+
 写入后：
 
 ```text

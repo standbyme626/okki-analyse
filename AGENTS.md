@@ -48,6 +48,9 @@ Prefer generating Playwright or Browser Use scripts for repeatable execution.
 - `before-write` (just before any write-intent operation)
 - `after-write` (after save/confirm when explicitly allowed)
 - `on-error` (any failed locator/action/validation)
+- Non-error checkpoints must wait for a stable page before screenshot:
+- minimum gate: `document.readyState=complete`, no visible loading mask, and detail landmarks already visible
+- if readiness does not arrive before timeout, write probe/snapshot evidence and skip the normal checkpoint screenshot instead of storing a white screen
 
 ## Experiment Log Standard
 
@@ -72,6 +75,7 @@ Prefer generating Playwright or Browser Use scripts for repeatable execution.
 6. Use refs like `@e1`, `@e2` only from the latest snapshot.
 7. Save screenshots into `screenshots/`.
 8. Generate code only after verifying the page flow.
+9. Prefer `okki_agent.edge_bridge.capture_checkpoint()` for checkpoint screenshots so readiness gating is enforced consistently.
 
 ## First MVP
 

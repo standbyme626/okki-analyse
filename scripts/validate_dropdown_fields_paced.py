@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from okki_agent import writer
+from okki_agent.edge_bridge import capture_checkpoint
 
 
 FIELDS = [
@@ -26,9 +27,19 @@ def now_tag() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
-def shot(path: Path) -> str:
-    writer._ab_run("screenshot", str(path))
-    return str(path)
+def shot(path: Path, checkpoint: str) -> Dict[str, Any]:
+    stem = path.stem
+    return capture_checkpoint(
+        path,
+        snapshot_path=path.with_name(f"{stem}.snapshot_i.txt"),
+        probe_path=path.with_name(f"{stem}.ready.json"),
+        page_kind="detail",
+        timeout_sec=25,
+        stable_rounds=2,
+        settle_ms=800,
+        run_fn=writer._ab_run,
+        eval_fn=writer._ab_eval,
+    ) | {"checkpoint": checkpoint}
 
 
 def set_first(label: str) -> str:
@@ -78,11 +89,17 @@ def run_one_field(label: str, ts: str, shot_dir: Path) -> Dict[str, Any]:
     rec["set_phase"]["wait_expand"] = writer.wait_ms(WAIT_OPEN_MS)
     rec["set_phase"]["set_first"] = set_first(label)
     rec["set_phase"]["wait_after_fill"] = writer.wait_ms(WAIT_AFTER_FILL_MS)
-    rec["set_phase"]["shot_before_save"] = shot(shot_dir / f"{ts}-{label}-set-before-save.png")
+    rec["set_phase"]["shot_before_save"] = shot(
+        shot_dir / f"{ts}-{label}-set-before-save.png",
+        "before-write",
+    )
     rec["set_phase"]["save"] = writer.save_changes()
     rec["set_phase"]["wait_after_save"] = writer.wait_ms(WAIT_AFTER_SAVE_MS)
     rec["set_phase"]["after_set"] = writer.read_visible_field_value(label)
-    rec["set_phase"]["shot_after_save"] = shot(shot_dir / f"{ts}-{label}-set-after-save.png")
+    rec["set_phase"]["shot_after_save"] = shot(
+        shot_dir / f"{ts}-{label}-set-after-save.png",
+        "after-write",
+    )
 
     # restore to empty phase
     rec["restore_phase"]["enter_edit"] = writer.enter_edit_mode()
@@ -91,11 +108,17 @@ def run_one_field(label: str, ts: str, shot_dir: Path) -> Dict[str, Any]:
     rec["restore_phase"]["wait_expand"] = writer.wait_ms(WAIT_OPEN_MS)
     rec["restore_phase"]["clear_to_empty"] = writer.clear_select_field_to_empty(label)
     rec["restore_phase"]["wait_after_fill"] = writer.wait_ms(WAIT_AFTER_FILL_MS)
-    rec["restore_phase"]["shot_before_save"] = shot(shot_dir / f"{ts}-{label}-clear-before-save.png")
+    rec["restore_phase"]["shot_before_save"] = shot(
+        shot_dir / f"{ts}-{label}-clear-before-save.png",
+        "before-write",
+    )
     rec["restore_phase"]["save"] = writer.save_changes()
     rec["restore_phase"]["wait_after_save"] = writer.wait_ms(WAIT_AFTER_SAVE_MS)
     rec["restore_phase"]["after_clear"] = writer.read_visible_field_value(label)
-    rec["restore_phase"]["shot_after_save"] = shot(shot_dir / f"{ts}-{label}-clear-after-save.png")
+    rec["restore_phase"]["shot_after_save"] = shot(
+        shot_dir / f"{ts}-{label}-clear-after-save.png",
+        "after-write",
+    )
 
     after_clear = rec["restore_phase"]["after_clear"]
     rec["restored_to_empty"] = after_clear in {"--", "", None}
@@ -125,7 +148,10 @@ def main() -> None:
         "total": len(FIELDS),
     }
 
-    report["global_before_shot"] = shot(shot_dir / f"{ts}-global-before.png")
+    report["global_before_shot"] = shot(
+        shot_dir / f"{ts}-global-before.png",
+        "before-read",
+    )
 
     for label in FIELDS:
         try:
@@ -142,7 +168,10 @@ def main() -> None:
                 }
             )
 
-    report["global_after_shot"] = shot(shot_dir / f"{ts}-global-after.png")
+    report["global_after_shot"] = shot(
+        shot_dir / f"{ts}-global-after.png",
+        "after-write",
+    )
     out = log_dir / f"validate-dropdown-paced-{ts}.json"
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(str(out))

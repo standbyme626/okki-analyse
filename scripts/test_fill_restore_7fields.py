@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
+from okki_agent.edge_bridge import capture_checkpoint
+
 
 ROOT = Path(__file__).resolve().parents[1]
 LOG_DIR = ROOT / "logs" / "recon"
@@ -45,8 +47,8 @@ def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
-def run_ab(*args: str) -> str:
-    p = subprocess.run(AB + list(args), text=True, capture_output=True)
+def run_ab(*args: str, timeout_sec: int = 20) -> str:
+    p = subprocess.run(AB + list(args), text=True, capture_output=True, timeout=timeout_sec)
     if p.returncode != 0:
         raise RuntimeError((p.stderr or p.stdout).strip())
     return (p.stdout or "").strip()
@@ -69,16 +71,34 @@ def parse_eval_output(raw: str) -> Any:
         return raw
 
 
-def eval_js(js: str) -> Any:
-    out = run_ab("eval", js)
+def eval_js(js: str, timeout_sec: int = 20) -> Any:
+    out = run_ab("eval", js, timeout_sec=timeout_sec)
     return parse_eval_output(out)
 
 
-def screenshot(name: str) -> str:
+def screenshot(name: str, checkpoint: str) -> Dict[str, Any]:
     SHOT_DIR.mkdir(parents=True, exist_ok=True)
     path = SHOT_DIR / name
-    run_ab("screenshot", str(path))
-    return str(path)
+    stem = path.stem
+    return capture_checkpoint(
+        path,
+        snapshot_path=LOG_DIR / f"{stem}.checkpoint.snapshot_i.txt",
+        probe_path=LOG_DIR / f"{stem}.checkpoint.ready.json",
+        page_kind="detail",
+        timeout_sec=25,
+        stable_rounds=2,
+        settle_ms=800,
+        run_fn=run_ab,
+        eval_fn=eval_js,
+    ) | {"checkpoint": checkpoint}
+
+
+def shot_path(artifact: Any) -> str | None:
+    if isinstance(artifact, dict):
+        return artifact.get("screenshot_path")
+    if isinstance(artifact, str):
+        return artifact
+    return None
 
 
 def snapshot_i(name: str) -> str:
@@ -345,7 +365,7 @@ def main() -> None:
     run["before"] = before
     run["steps"].append({"step": "read_before", "ok": True})
     run["artifacts"] = {
-        "before_shot": screenshot("test7_before_write.png"),
+        "before_shot": screenshot("test7_before_write.png", "before-read"),
         "before_snapshot_i": snapshot_i("test7_before_write.snapshot_i.txt"),
     }
 
@@ -376,14 +396,17 @@ def main() -> None:
         paced_wait(AFTER_FILL_WAIT_MS)
     run["modify_ops"] = modify_ops
 
-    run["artifacts"]["modified_before_confirm_shot"] = screenshot("test7_modified_before_confirm.png")
+    run["artifacts"]["modified_before_confirm_shot"] = screenshot(
+        "test7_modified_before_confirm.png",
+        "before-write",
+    )
     run["steps"].append({"step": "confirm_save_modify", "result": click_confirm_save()})
     run["steps"].append({"step": "wait_after_confirm_modify", "ms": AFTER_SAVE_WAIT_MS})
     paced_wait(AFTER_SAVE_WAIT_MS)
 
     after_modify = get_target_values()
     run["after_modify"] = after_modify
-    run["artifacts"]["after_modify_shot"] = screenshot("test7_after_modify.png")
+    run["artifacts"]["after_modify_shot"] = screenshot("test7_after_modify.png", "after-write")
     run["artifacts"]["after_modify_snapshot_i"] = snapshot_i("test7_after_modify.snapshot_i.txt")
 
     # Restore phase
@@ -418,14 +441,17 @@ def main() -> None:
     run["restore_targets"] = restore_targets
     run["restore_ops"] = restore_ops
 
-    run["artifacts"]["restore_before_confirm_shot"] = screenshot("test7_restore_before_confirm.png")
+    run["artifacts"]["restore_before_confirm_shot"] = screenshot(
+        "test7_restore_before_confirm.png",
+        "before-write",
+    )
     run["steps"].append({"step": "confirm_save_restore", "result": click_confirm_save()})
     run["steps"].append({"step": "wait_after_confirm_restore", "ms": AFTER_SAVE_WAIT_MS})
     paced_wait(AFTER_SAVE_WAIT_MS)
 
     after_restore = get_target_values()
     run["after_restore"] = after_restore
-    run["artifacts"]["after_restore_shot"] = screenshot("test7_after_restore.png")
+    run["artifacts"]["after_restore_shot"] = screenshot("test7_after_restore.png", "after-write")
     run["artifacts"]["after_restore_snapshot_i"] = snapshot_i("test7_after_restore.snapshot_i.txt")
 
     run["finished_at"] = now_iso()
@@ -437,14 +463,20 @@ def main() -> None:
         action="Test 7 fields fill then restore on one customer",
         old_vals=before,
         new_vals=after_modify,
-        shots={"before": run["artifacts"]["before_shot"], "after": run["artifacts"]["after_modify_shot"]},
+        shots={
+            "before": shot_path(run["artifacts"]["before_shot"]),
+            "after": shot_path(run["artifacts"]["after_modify_shot"]),
+        },
         result="success",
     )
     append_write_log(
         action="Restore 7 fields to original values on one customer",
         old_vals=after_modify,
         new_vals=after_restore,
-        shots={"before": run["artifacts"]["restore_before_confirm_shot"], "after": run["artifacts"]["after_restore_shot"]},
+        shots={
+            "before": shot_path(run["artifacts"]["restore_before_confirm_shot"]),
+            "after": shot_path(run["artifacts"]["after_restore_shot"]),
+        },
         result="success",
     )
 

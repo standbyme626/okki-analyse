@@ -90,6 +90,10 @@ Don't screenshot every step. Only at these four checkpoints:
 | `after-write` | After save/confirm (when explicitly allowed) |
 | `on-error` | Any failed locator / action / validation |
 
+For `before-read` / `before-write` / `after-write`, do not capture immediately after `open` / `reload`.
+Wait until the page is stable: `document.readyState=complete`, no loading mask, and detail landmarks are visible.
+If readiness never arrives, save probe + snapshot evidence and skip the normal screenshot rather than storing a white-screen artifact.
+
 ## Architecture
 
 ```
@@ -136,6 +140,8 @@ _ref = _eval("document.querySelector(...).click()")  # JS in browser
 next_page()   # → (1, 2), polls until page changes
 prev_page()   # → (2, 1), raises if on page 1
 ```
+
+For screenshot checkpoints, prefer `okki_agent.edge_bridge.capture_checkpoint(...)` instead of calling `screenshot` directly.
 
 ## Commit convention
 

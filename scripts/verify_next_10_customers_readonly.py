@@ -9,6 +9,8 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from okki_agent.edge_bridge import capture_checkpoint
+
 AB = ["agent-browser", "--session", "okki"]
 OUT_DIR = Path("logs/recon")
 SHOT_DIR = Path("screenshots/recon")
@@ -65,17 +67,51 @@ class CustomerRun:
     detail_url: Optional[str]
 
 
-def run_ab(*args: str) -> str:
-    proc = subprocess.run(AB + list(args), text=True, capture_output=True)
+def run_ab(*args: str, timeout_sec: int = 20) -> str:
+    proc = subprocess.run(AB + list(args), text=True, capture_output=True, timeout=timeout_sec)
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or proc.stdout).strip())
     return proc.stdout.strip()
 
 
-def safe_run_ab(*args: str) -> Tuple[bool, str]:
-    proc = subprocess.run(AB + list(args), text=True, capture_output=True)
+def safe_run_ab(*args: str, timeout_sec: int = 20) -> Tuple[bool, str]:
+    try:
+        proc = subprocess.run(AB + list(args), text=True, capture_output=True, timeout=timeout_sec)
+    except subprocess.TimeoutExpired:
+        return False, f"timeout after {timeout_sec}s: {' '.join(args)}"
     out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
     return proc.returncode == 0, out.strip()
+
+
+def parse_eval_output(raw: str):
+    raw = raw.strip()
+    if not raw:
+        return None
+    if raw.startswith('"'):
+        raw = json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+
+def eval_js(js: str, timeout_sec: int = 20):
+    return parse_eval_output(run_ab("eval", js, timeout_sec=timeout_sec))
+
+
+def checkpoint(path: Path, page_kind: str = "detail") -> Dict[str, object]:
+    stem = path.stem
+    return capture_checkpoint(
+        path,
+        snapshot_path=OUT_DIR / f"{stem}.checkpoint.snapshot_i.txt",
+        probe_path=OUT_DIR / f"{stem}.checkpoint.ready.json",
+        page_kind=page_kind,  # type: ignore[arg-type]
+        timeout_sec=25,
+        stable_rounds=2,
+        settle_ms=800,
+        run_fn=run_ab,
+        eval_fn=eval_js,
+    )
 
 
 def wait_ms(ms: int = 700) -> None:
@@ -235,7 +271,7 @@ def run_one(index: int, page_no: int, name: str, list_snapshot: str, list_url: s
         errors.extend(other_state["errors"])
 
     # capture one screenshot per customer at end of detail checks
-    safe_run_ab("screenshot", str(SHOT_DIR / f"{run_prefix}-detail.png"))
+    checkpoint(SHOT_DIR / f"{run_prefix}-detail.png")
 
     # return to list by opening known list URL (more stable than browser history back)
     ok, out = safe_run_ab("open", list_url)

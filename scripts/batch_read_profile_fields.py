@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from okki_agent.edge_bridge import capture_checkpoint
 from okki_agent.page_model import (
     detect_page_mode,
     detect_profile_tab_state,
@@ -65,6 +66,37 @@ def safe_ab(*args: str, timeout_sec: int = 20) -> Tuple[bool, str]:
         return False, f"timeout after {timeout_sec}s: {' '.join(args)}"
     out = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
     return p.returncode == 0, out.strip()
+
+
+def parse_eval_output(raw: str) -> Any:
+    raw = raw.strip()
+    if not raw:
+        return None
+    if raw.startswith('"'):
+        raw = json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+
+def eval_js(js: str, timeout_sec: int = 20) -> Any:
+    return parse_eval_output(run_ab("eval", js, timeout_sec=timeout_sec))
+
+
+def checkpoint(path: Path, page_kind: str = "detail") -> Dict[str, Any]:
+    stem = path.stem
+    return capture_checkpoint(
+        path,
+        snapshot_path=ARTIFACT_DIR / f"{stem}.checkpoint.snapshot_i.txt",
+        probe_path=ARTIFACT_DIR / f"{stem}.checkpoint.ready.json",
+        page_kind=page_kind,  # type: ignore[arg-type]
+        timeout_sec=25,
+        stable_rounds=2,
+        settle_ms=800,
+        run_fn=run_ab,
+        eval_fn=eval_js,
+    )
 
 
 def wait_detail_loaded(max_wait_sec: int = 10) -> Tuple[bool, str, str, str, str]:
@@ -187,7 +219,7 @@ def process_one(row: InputRow) -> Dict[str, Any]:
         "page_mode": "unknown",
         "error": None,
         "actions": [],
-        "evidence": {"snapshot_files": [], "screenshot_files": []},
+        "evidence": {"snapshot_files": [], "screenshot_files": [], "checkpoint_meta": []},
     }
 
     prefix = f"idx{row.customer_index:03d}"
@@ -209,9 +241,10 @@ def process_one(row: InputRow) -> Dict[str, Any]:
         record["evidence"]["snapshot_files"].extend([str(snap_i_path), str(snap_full_path)])
 
         shot_before = SHOT_DIR / f"{prefix}-before-read.png"
-        ok, out = safe_ab("screenshot", str(shot_before), timeout_sec=10)
-        if ok:
-            record["evidence"]["screenshot_files"].append(str(shot_before))
+        before_meta = checkpoint(shot_before)
+        record["evidence"]["checkpoint_meta"].append(before_meta)
+        if before_meta.get("captured") and before_meta.get("screenshot_path"):
+            record["evidence"]["screenshot_files"].append(str(before_meta["screenshot_path"]))
 
         mode_det = detect_page_mode(current_url, current_title, snap_full)
         record["page_mode"] = mode_det.mode.value
@@ -282,9 +315,10 @@ def process_one(row: InputRow) -> Dict[str, Any]:
         record["status"] = "success"
 
         shot_after = SHOT_DIR / f"{prefix}-after-read.png"
-        ok, out = safe_ab("screenshot", str(shot_after), timeout_sec=10)
-        if ok:
-            record["evidence"]["screenshot_files"].append(str(shot_after))
+        after_meta = checkpoint(shot_after)
+        record["evidence"]["checkpoint_meta"].append(after_meta)
+        if after_meta.get("captured") and after_meta.get("screenshot_path"):
+            record["evidence"]["screenshot_files"].append(str(after_meta["screenshot_path"]))
 
     except Exception as e:
         record["error"] = str(e)
