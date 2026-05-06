@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-05-06 — 新增 10 条公司备注往返批量测试脚本
+
+### 背景
+
+- 单客户 `company.remark` 已经通过 `GET scene=edit -> POST /api/customerV3Write/edit -> GET readback -> restore` 完整验证；
+- 需要把这条链路固化成可复用的 10 条小批量 smoke test；
+- 用户要求只允许改动一个字段，即 `company.remark`，且每条测试后必须恢复原值。
+
+### 改动
+
+- 新增 `scripts/batch_roundtrip_company_remark.py`：
+  - 从现有阶段一 URL CSV 读取候选客户；
+  - 对每个候选先 fresh-read `scene=edit`，只选择当前 `remark` 为空的客户进入批量测试；
+  - 为每个客户执行 `before-read -> set remark -> readback -> restore -> readback`；
+  - 构造 full-payload `POST /api/customerV3Write/edit` 请求，但仅覆盖 `data.remark`；
+  - 将写后页面重开/截图改为 best-effort，不允许因为 UI 超时阻断恢复；
+  - 新增异常兜底恢复：任意中断后只要检测到 `remark` 偏离原值，就立即走接口补恢复；
+  - 每次写入都追加 `logs/okki-write-actions.jsonl`；
+  - 每个 run 生成 `summary.json`、`summary.md`、逐客户 `customer_results.jsonl` 和 checkpoint 截图/快照。
+
+### 影响范围
+
+- 新增一个受控批量测试脚本，不扩大写入字段范围；
+- 实际执行时仍遵守低速串行、写前基线、写后读回和失败即停原则。
+
 ## 2026-05-06 — 新增 OKKI 回填前后同步与风控方案文档
 
 ### 背景
