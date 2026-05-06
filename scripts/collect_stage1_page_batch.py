@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import random
 import sys
 import time
@@ -38,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Collect multiple OKKI list pages with pacing and health checks."
     )
+    parser.add_argument("--start-page", type=int, default=0, help="Logical start page; 0 means auto-detect from current list page.")
     parser.add_argument("--pages", type=int, default=10)
     parser.add_argument("--page-size", type=int, default=100)
     parser.add_argument("--min-raw-count", type=int, default=95)
@@ -48,9 +50,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--extra-break-every", type=int, default=3)
     parser.add_argument("--extra-break-min", type=float, default=10.0)
     parser.add_argument("--extra-break-max", type=float, default=20.0)
+    parser.add_argument("--health-snapshot-every", type=int, default=50)
     parser.add_argument("--out", default="", help="Combined CSV output path.")
     parser.add_argument("--raw-dir", default="logs/recon/stage1_batch")
     parser.add_argument("--summary-out", default="")
+    parser.add_argument("--progress-out", default="", help="Per-page progress JSONL path.")
     return parser.parse_args()
 
 
@@ -64,6 +68,8 @@ def validate_page(
     expected_page: int,
     page_size: int,
     min_raw_count: int,
+    api_total_item: int | None,
+    expected_total_pages: int | None,
     state: Dict[str, Any],
     result: Dict[str, Any],
 ) -> List[str]:
@@ -76,8 +82,27 @@ def validate_page(
         errors.append(f"result page mismatch: expected {expected_page}, got {result.get('page')}")
     if result.get("api_code") not in (0, None):
         errors.append(f"api_code not successful: {result.get('api_code')}")
-    if result.get("raw_count", 0) < min_raw_count:
-        errors.append(f"raw_count too low: {result.get('raw_count')} < {min_raw_count}")
+    raw_count = int(result.get("raw_count") or 0)
+    current_api_total_item = result.get("api_total_item")
+    if current_api_total_item is not None:
+        current_api_total_item = int(current_api_total_item)
+    effective_api_total_item = current_api_total_item or api_total_item
+    effective_total_pages = expected_total_pages
+    if effective_api_total_item:
+        effective_total_pages = math.ceil(effective_api_total_item / page_size)
+    if (
+        effective_api_total_item
+        and effective_total_pages
+        and expected_page == effective_total_pages
+    ):
+        expected_final_raw = effective_api_total_item - page_size * (effective_total_pages - 1)
+        expected_final_raw = max(1, expected_final_raw)
+        if raw_count != expected_final_raw:
+            errors.append(
+                f"last page raw_count mismatch: expected {expected_final_raw}, got {raw_count}"
+            )
+    elif raw_count < min_raw_count:
+        errors.append(f"raw_count too low: {raw_count} < {min_raw_count}")
     company_ids = [row["company_id"] for row in result.get("rows", [])]
     if len(company_ids) != len(set(company_ids)):
         errors.append("duplicate company_id detected in raw rows")
@@ -152,6 +177,12 @@ def append_experiment_log(summary: Dict[str, Any], start_state: Dict[str, Any]) 
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def append_progress(path: Path, obj: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+
 def main() -> int:
     args = parse_args()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -159,7 +190,7 @@ def main() -> int:
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     start_state = get_list_page_state()
-    start_page = int(start_state.get("current_page") or 0)
+    start_page = args.start_page or int(start_state.get("current_page") or 0)
     if start_page <= 0:
         raise RuntimeError(f"Cannot determine current page: {start_state}")
 
@@ -170,10 +201,14 @@ def main() -> int:
     summary_path = Path(args.summary_out) if args.summary_out else Path(
         f"logs/recon/stage1_pages{start_page:03d}-{end_page:03d}_summary_{stamp}.json"
     )
+    progress_path = Path(args.progress_out) if args.progress_out else raw_dir / "page_progress.jsonl"
 
     events: List[Dict[str, Any]] = []
     all_valid_rows: List[Dict[str, Any]] = []
     page_summaries: List[Dict[str, Any]] = []
+    initial_api_total_item: int | None = None
+    api_total_item: int | None = None
+    expected_total_pages: int | None = None
 
     for offset in range(args.pages):
         expected_page = start_page + offset
@@ -184,7 +219,21 @@ def main() -> int:
             expected_page_size=args.page_size,
         )
         events.append({"event": "api_page_request", "page": expected_page, "settle_sec": settle_sec})
-        errors = validate_page(expected_page, args.page_size, args.min_raw_count, state, result)
+        if result.get("api_total_item") is not None:
+            current_api_total_item = int(result["api_total_item"])
+            if initial_api_total_item is None:
+                initial_api_total_item = current_api_total_item
+            api_total_item = current_api_total_item
+            expected_total_pages = math.ceil(api_total_item / args.page_size)
+        errors = validate_page(
+            expected_page,
+            args.page_size,
+            args.min_raw_count,
+            api_total_item,
+            expected_total_pages,
+            state,
+            result,
+        )
 
         page_raw_path = raw_dir / f"page{expected_page:03d}.raw.json"
         page_raw_path.write_text(
@@ -202,9 +251,27 @@ def main() -> int:
             "blank_country_count": sum(1 for row in result["valid_rows"] if not row.get("country")),
             "errors": errors,
             "raw_path": str(page_raw_path),
+            "api_total_item": result.get("api_total_item"),
+            "expected_total_pages": expected_total_pages,
         }
         page_summaries.append(page_summary)
         events.append({"event": "page_collected", **page_summary})
+        append_progress(
+            progress_path,
+            {
+                "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "page": expected_page,
+                "raw_count": result["raw_count"],
+                "demo_count": result["demo_count"],
+                "valid_count": result["valid_count"],
+                "blank_country_count": page_summary["blank_country_count"],
+                "errors": errors,
+                "combined_csv": str(combined_path),
+                "api_total_item": result.get("api_total_item"),
+                "expected_total_pages": expected_total_pages,
+                "total_valid_rows_so_far": len(all_valid_rows) + (0 if errors else result["valid_count"]),
+            },
+        )
 
         if errors:
             snapshot_path = raw_dir / f"page{expected_page:03d}.on-error.snapshot_i.txt"
@@ -219,6 +286,17 @@ def main() -> int:
         if offset == args.pages - 1:
             break
 
+        if args.health_snapshot_every and (offset + 1) % args.health_snapshot_every == 0:
+            health_snapshot = raw_dir / f"page{expected_page:03d}.health.snapshot_i.txt"
+            health_snapshot.write_text(_run("snapshot", "-i", timeout_sec=20) + "\n", encoding="utf-8")
+            events.append(
+                {
+                    "event": "health_snapshot",
+                    "page": expected_page,
+                    "path": str(health_snapshot),
+                }
+            )
+
         sleep_random(args.page_delay_min, args.page_delay_max, "post-page api pacing", events)
         sleep_random(args.nav_delay_min, args.nav_delay_max, "between logical pages pacing", events)
 
@@ -232,10 +310,14 @@ def main() -> int:
         "timestamp": stamp,
         "start_page": start_page,
         "requested_pages": args.pages,
+        "initial_api_total_item": initial_api_total_item,
+        "api_total_item": api_total_item,
+        "expected_total_pages": expected_total_pages,
         "completed_pages": len([p for p in page_summaries if not p["errors"]]),
         "combined_csv": str(combined_path),
         "summary_path": str(summary_path),
         "raw_dir": str(raw_dir),
+        "progress_path": str(progress_path),
         "final_snapshot": str(final_snapshot),
         "total_valid_rows": len(all_valid_rows),
         "page_summaries": page_summaries,
