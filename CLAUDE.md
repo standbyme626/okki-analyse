@@ -42,6 +42,34 @@ The bridge URL is auto-discovered by `okki_agent/edge_bridge.py` via `GET /json/
 - Re-run snapshot after **every** navigation or DOM change.
 - `@eXX` refs are valid only for the immediately following action, not beyond.
 
+## Knowledge solidification workflow
+
+After every script run or browser experiment, check whether the run produced reusable knowledge.
+
+Solidify these findings when discovered:
+
+- New OKKI interface endpoint
+- Request parameters or payload schema
+- Response fields
+- Field mapping
+- Stable UI selector strategy
+- Page mode or state transition
+- Failure mode and recovery rule
+
+Where to record:
+
+- `OKKI_INTERFACES.md` for confirmed endpoints, payloads, response fields, and risk notes.
+- `RUN_REVIEW_AND_SOLIDIFICATION.md` for run-review and solidification rules.
+- `CHANGELOG.md` for every repository file modification.
+- `logs/experiment-runs.jsonl` for browser experiments.
+- Code modules when the behavior is stable enough to reuse.
+
+Interface path is the primary automation path. UI path is the fallback and verification path.
+
+For UI automation, never preserve temporary `@eXX` refs as durable selectors. Use semantic anchors such as field labels, section titles, drawer/footer context, and page mode detection.
+
+For write automation, do not submit partial payloads to full-form save endpoints. Read the original edit data first, construct a full payload, change only the target fields, verify the diff, write, then read back.
+
 ## Page modes
 
 OKKI customer detail has two modes. Automation must **detect the current mode first**, then route to the matching action flow:
@@ -82,6 +110,20 @@ scripts/            ← Entry-point scripts; each either wraps agent-browser dir
 ```
 
 Key relationship: `writer._ab_run` and `writer._ab_eval` are imported from `edge_bridge._run` / `edge_bridge._eval`. The `**_kw` on those functions absorbs legacy `session=` keyword args, so all 16 writer business functions work without any call-site changes.
+
+## Confirmed OKKI interface notes
+
+Confirmed interface notes live in `OKKI_INTERFACES.md`.
+
+Current important findings:
+
+- Stage 1 list read path: `POST /api/customerV3Read/companyList`
+- Customer detail edit save path: `POST /api/customerV3Write/edit`
+- Company remark field: `data.remark`
+- Detail readback path: `GET /api/customerV2Read/detail?company_id=...&scene=detail`
+- Edit raw data path: `GET /api/customerV2Read/detail?company_id=...&scene=edit`
+
+The edit save endpoint is a full-form save endpoint, not a single-field patch endpoint.
 
 ## Writing scripts that control the browser
 

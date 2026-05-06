@@ -89,6 +89,27 @@ Create a script that handles one test customer only:
 - Bulk writes are forbidden unless user explicitly approves batch scope and stop conditions.
 - After a write, always perform read-back verification of changed fields.
 
+## Run Review And Solidification
+
+- After every script run, browser experiment, HAR capture, or UI probe, review whether new knowledge should be solidified.
+- Interface solidification is the primary path for repeatable read/write automation.
+- UI solidification is required as the fallback path and verification path.
+- Do not keep newly discovered selectors, endpoints, payload fields, or failure modes only in chat history.
+- If a run discovers reusable interface behavior, update `OKKI_INTERFACES.md`.
+- If a run discovers reusable UI behavior, update UI model documentation or code.
+- If a run changes files, update repository-root `CHANGELOG.md`.
+- If a run involves browser experimentation, append `logs/experiment-runs.jsonl`.
+
+## Interface And UI Solidification
+
+- Read interfaces may be used for data collection and verification when they are observed from normal OKKI page behavior.
+- Write interfaces must not be called unless the user explicitly approves the exact customer scope, fields, stop conditions, and verification plan.
+- Known OKKI interfaces and field mappings are recorded in `OKKI_INTERFACES.md`.
+- Known run-review rules are recorded in `RUN_REVIEW_AND_SOLIDIFICATION.md`.
+- UI selectors must be semantic and reusable. Do not solidify temporary `@eXX` refs.
+- Preferred UI field strategy: `label text -> form item/container -> input/textarea/select`.
+- Preferred write safety strategy: read old value, build full payload, diff only target fields, write, read back, log result.
+
 ## Change Log Discipline
 
 - Every repository modification must append one entry in `CHANGELOG.md`.

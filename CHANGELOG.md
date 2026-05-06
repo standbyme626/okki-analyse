@@ -1,5 +1,69 @@
 # Changelog
 
+## 2026-05-06 — 将接口/UI 固化规则写入 AGENTS 与 CLAUDE
+
+### 背景
+
+- `RUN_REVIEW_AND_SOLIDIFICATION.md` 已定义每次脚本运行后的复盘与固化流程；
+- `OKKI_INTERFACES.md` 已记录阶段一只读接口和客户详情写入接口；
+- 需要让新会话读取 `AGENTS.md` / `CLAUDE.md` 时直接看到这些强制规则和文档入口。
+
+### 改动
+
+- 更新 `AGENTS.md`：
+  - 增加 run review and solidification 规则；
+  - 增加 interface/UI solidification 规则；
+  - 明确接口主路径、UI 兜底路径、语义 selector 和写入安全策略。
+- 更新 `CLAUDE.md`：
+  - 增加 knowledge solidification workflow；
+  - 增加已确认 OKKI 接口入口和关键接口摘要；
+  - 明确 full-form save endpoint 不允许 partial payload。
+
+### 影响范围
+
+- 仅文档与工作流约束更新，不执行 OKKI 页面操作或接口调用。
+
+## 2026-05-05 — 新增运行复盘与固化流程文档
+
+### 背景
+
+- 每次脚本运行都会产生可能复用的新知识，包括接口、字段映射、UI 结构和失败模式；
+- 后续阶段需要同时维护接口主路径和 UI 兜底路径；
+- 需要把“运行后复盘并固化”的流程写成根目录规范。
+
+### 改动
+
+- 新增 `RUN_REVIEW_AND_SOLIDIFICATION.md`：
+  - 明确“接口固化 = 主路径，UI 固化 = 兜底路径 + 验证路径”；
+  - 定义每次 run 后必须检查的 10 个问题；
+  - 规定接口固化、UI 固化、写入场景和批量前门禁；
+  - 给出后续建议模块：`detail_page.py`、`edit_payload.py`、`ui_model.py`、`OKKI_UI_MODEL.md`。
+
+### 影响范围
+
+- 仅新增流程文档，不执行 OKKI 页面操作或接口调用。
+
+## 2026-05-05 — 记录已确认 OKKI 接口
+
+### 背景
+
+- 阶段一已确认客户列表只读接口；
+- 单客户公司备注 UI 探查已确认客户详情编辑写入接口；
+- 后续批量回填前需要把接口、字段映射、风险边界和证据路径固化到根目录文档。
+
+### 改动
+
+- 新增 `OKKI_INTERFACES.md`：
+  - 记录 `/api/customerV3Read/companyList` 只读列表接口；
+  - 记录 `/api/customerV3Write/edit` 客户详情编辑保存接口；
+  - 明确公司备注字段为 `data.remark`，联系人备注为 `data.customers[0].remark`；
+  - 记录保存前辅助校验接口和保存后详情读回接口；
+  - 补充批量回填前必须遵守的安全门禁和证据文件路径。
+
+### 影响范围
+
+- 仅新增接口文档，不执行 OKKI 页面操作或接口调用。
+
 ## 2026-05-05 — 固化 OKKI 列表页 URL 采集模型
 
 ### 背景
